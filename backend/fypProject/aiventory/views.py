@@ -10,24 +10,197 @@ import jwt
 import os
 from django.core.files.storage import FileSystemStorage
 from bson import ObjectId  # Import ObjectId from bson to handle MongoDB IDs
-
+import csv
+from io import StringIO
 from datetime import datetime, timedelta
 from io import BytesIO
-
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from django.core.exceptions import ValidationError  # Add this import for ValidationError
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from bson import ObjectId
+from io import BytesIO
+import pandas as pd
+from datetime import datetime
+import joblib
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.ensemble import RandomForestClassifier
 # MongoDB Atlas connection
 client = MongoClient("mongodb+srv://syeddaniyalhashmi123:test123@cluster0.dutvq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db = client["FYP"]
 
+# Predefined mappings for keywords
+COLUMN_MAP = {
+    'vendor': ['vendor', 'reliability','ReliabilityScore', 'DeliveryTime','DeliveryTime', "new vendors", 'manufacturer', 'supplier'],
+    'product': [
+        'productname', 'category', 'subcategory', 'stock',
+        'reorder', 'cost', 'selling', 'price', 'barcode',
+        'expiry', 'past', 'sales', 'timespan', 'quantity'
+    ]
+    
+    ,'unclassified': []  # This will be dynamically filled
 
+}
 
-# Example usage
-required_columns = [
-    'productname', 'category', 'subcategory', 'vendor', 
-    'stockquantity', 'reorderthreshold', 'costprice', 
+REQUIRED_COLUMNS = [
+    'productname', 'category', 'subcategory', 'vendor',
+    'stockquantity', 'reorderthreshold', 'costprice',
     'sellingprice', 'timespan', 'expirydate', 'pastsalesdata',
-    'DeliveryTime', 'ReliabilityScore', 'Barcode', 
-    'DeliveryTime_Normalized', 'New Vendors'
+    'DeliveryTime', 'ReliabilityScore', 'Barcode'
 ]
+
+
+@api_view(['POST'])
+def upload_dataset(request):
+    try:
+        # Get User ID
+        user_id = request.data.get("user_id")
+        if not user_id:
+            return Response({"error": "User ID is required."}, status=400)
+
+        # Check if the user already has a dataset uploaded
+        user = db["users"].find_one({"_id": ObjectId(user_id)})
+        if user and user.get("datasets") and len(user["datasets"]) > 0:
+            return Response({"error": "You can only upload one dataset."}, status=400)
+
+        # Check Dataset File
+        if 'dataset' not in request.FILES:
+            return Response({"error": "Dataset file is required."}, status=400)
+
+        # Get Dataset File
+        dataset_file = request.FILES['dataset']
+
+        # Validate file type and size
+        validate_file_extension(dataset_file.name)
+
+        # Read the dataset into memory
+        file_bytes = dataset_file.read()
+        df = pd.read_csv(BytesIO(file_bytes))  # Load into pandas dataframe
+        df.columns = df.columns.str.strip()
+
+    # Assign IDs to vendors and process vendor data
+        vendor_columns = ["vendor","DeliveryTime", "ReliabilityScore"]  # The column we are interested in for vendor data
+        vendor_data = df[vendor_columns].drop_duplicates().reset_index(drop=True)
+        # Generate unique vendor IDs
+        vendor_data['_id'] = vendor_data.apply(lambda x: ObjectId(), axis=1)
+        vendor_mapping = dict(zip(vendor_data['vendor'], vendor_data['_id']))
+
+    # we can define vednor in vendor_columns
+       # Simulate Product Columns and Mapping to Vendor IDs
+        product_columns = [
+            "productname", "category", "subcategory", "vendor", "stockquantity", "sellingprice", "Barcode", 
+            "expirydate", "pastsalesdata", "timespan"
+        ]
+        # Process product data (with foreign key)
+        
+        product_data = df[product_columns].drop_duplicates().reset_index(drop=True)
+        # Map Vendor IDs to Product Data
+        product_data['vendor_id'] = df['vendor'].map(vendor_mapping)
+        
+        
+         # Remove the 'vendor' column from the product data after mapping vendor IDs
+        product_data.drop(columns=['vendor'], inplace=True)
+
+ # Perform column classification
+        classified_columns = {
+            'vendor': [],
+            'product': [],
+            'unclassified': []
+        }
+      # Classify columns as per your predefined mappings
+        for col in df.columns:
+            if col in COLUMN_MAP['vendor']:
+                classified_columns['vendor'].append(col)
+            elif col in COLUMN_MAP['product']:
+                classified_columns['product'].append(col)
+            else:
+                classified_columns['unclassified'].append(col)
+
+        # Check column existence and report any missing required columns
+        missing_columns = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+        if missing_columns:
+            return Response({"error": f"Missing required columns: {', '.join(missing_columns)}"}, status=400)
+
+        # Output the classification result for debugging
+        print("Classified Columns:", classified_columns)
+
+        # Check if 'DeliveryTime' is being mapped and classified correctly
+        if 'DeliveryTime' in classified_columns['product'] or 'DeliveryTime' in classified_columns['vendor']:
+            print("'DeliveryTime' is classified correctly.")
+        else:
+            print("'DeliveryTime' is not classified correctly. Please check column mapping.")
+
+        # Handle missing vendor IDs in product data
+        if product_data['vendor_id'].isnull().any():
+            missing_products = product_data[product_data['vendor_id'].isnull()]
+            return Response({
+                "error": "Some products do not have a corresponding vendor.",
+                "missing_products": missing_products.to_dict(orient='records')
+            }, status=400)
+
+        
+        # start here
+        dataset_id = ObjectId()
+        
+ # for product db
+        product_document = {
+            "_id": ObjectId(),  # Generate unique ID for dataset
+            "user_id": ObjectId(user_id),
+            "dataset_id": dataset_id,
+            "products": product_data.to_dict(orient="records"),  # Product references
+            "upload_date": datetime.utcnow().isoformat(),
+        }    
+        db["products"].insert_one(product_document)
+        
+       
+ # for vendor db
+
+        vendor_document = {
+            "_id": ObjectId(),  # Generate unique ID for dataset
+            "user_id": ObjectId(user_id),
+            "dataset_id": dataset_id,
+            "vendors": vendor_data.to_dict(orient="records"),  # Vendor references
+            "upload_date": datetime.utcnow().isoformat(),
+        }
+        db["vendors"].insert_one(vendor_document)
+      
+        # 3. Create Dataset Document
+        dataset_document = {
+            "_id": dataset_id,
+            "user_id": ObjectId(user_id),
+            "filename": dataset_file.name,
+            "vendor_id": vendor_document["_id"],  # Reference the vendor document
+            "product_id": product_document["_id"],   # Product references # make this foreign key
+            "upload_date": datetime.utcnow().isoformat(),
+        }
+        db["datasets"].insert_one(dataset_document)
+        
+
+        # Update user document to reference this dataset
+        dataset_info = {
+            "dataset_id": dataset_id,
+            "filename": dataset_file.name,
+            "upload_date": dataset_document["upload_date"],
+            "status": "uploaded"
+        }
+        db["users"].update_one(
+            {"_id": ObjectId(user_id)},
+            {"$push": {"datasets": dataset_info}}
+        )
+  # Return success response
+        return Response({
+            "message": f"Dataset '{dataset_file.name}' uploaded successfully!",
+            "dataset_id": str(dataset_document["_id"]),
+            "message": "Dataset successfully processed.",
+          
+        })
+        
+
+    except ValidationError as e:
+        return Response({"error": str(e)}, status=400)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
 
 
 # for signUp done
@@ -57,75 +230,180 @@ def signup(request):
 # dataset slightly done
 # data save horaha ha file ma kyu?
 # user has option to upload only one dataset
-@api_view(['POST'])
-def upload_dataset(request):
+#for login/signup 
+
+
+# @api_view(['POST'])
+# def upload_dataset(request):
+#     try:
+#         # Get User ID
+#         user_id = request.data.get("user_id")
+#         if not user_id:
+#             return Response({"error": "User ID is required."}, status=400)
+
+#         # Check Dataset File
+#         if 'dataset' not in request.FILES:
+#             return Response({"error": "Dataset file is required."}, status=400)
+
+#         # Get Dataset File
+#         dataset_file = request.FILES['dataset']
+#         validate_file_extension(dataset_file.name)
+
+#         # Read dataset into DataFrame
+#         file_bytes = dataset_file.read()
+#         df = pd.read_csv(BytesIO(file_bytes))
+
+#         # Extract unique products and vendors
+#         products = df.to_dict("records")
+#         vendors_set = set([product["vendor"] for product in products])
+#         product_ids, vendor_ids = [], []
+
+#         # Insert or update vendors
+#         for vendor_name in vendors_set:
+#             vendor = db["vendors"].find_one({"name": vendor_name})
+#             if not vendor:
+#                 new_vendor = {"name": vendor_name, "products": []}
+#                 vendor_id = db["vendors"].insert_one(new_vendor).inserted_id
+#             else:
+#                 vendor_id = vendor["_id"]
+
+#             vendor_ids.append(vendor_id)
+
+#         # Insert or update products
+#         for product in products:
+#             vendor_name = product["vendor"]
+#             vendor = db["vendors"].find_one({"name": vendor_name})
+#             vendor_id = vendor["_id"]
+
+#             existing_product = db["products"].find_one({"name": product["product"]})
+#             if not existing_product:
+#                 product["vendor_id"] = vendor_id
+#                 product_id = db["products"].insert_one(product).inserted_id
+#             else:
+#                 product_id = existing_product["_id"]
+
+#             # Update vendor's product list
+#             db["vendors"].update_one({"_id": vendor_id}, {"$addToSet": {"products": product_id}})
+#             product_ids.append(product_id)
+
+#         # Save dataset information
+#         dataset_document = {
+#             "user_id": ObjectId(user_id),
+#             "filename": dataset_file.name,
+#             "products": product_ids,
+#             "vendors": vendor_ids,
+#             "upload_date": datetime.utcnow().isoformat(),
+#         }
+#         db["datasets"].insert_one(dataset_document)
+
+#         return Response({"message": "Dataset uploaded successfully!"}, status=201)
+
+#     except Exception as e:
+#         return Response({"error": str(e)}, status=500)
+
+@api_view(['GET'])
+def get_vendors(request):
     try:
-        # Get User ID
-        user_id = request.data.get("user_id")
+        # Get User ID from request parameters
+        user_id = request.query_params.get("user_id")
         if not user_id:
             return Response({"error": "User ID is required."}, status=400)
 
-        # Check if the user already has a dataset uploaded
+        # Validate if user exists
         user = db["users"].find_one({"_id": ObjectId(user_id)})
-        if user and user.get("datasets") and len(user["datasets"]) > 0:
-            return Response({"error": "You can only upload one dataset."}, status=400) 
-        # Check Dataset File
-        if 'dataset' not in request.FILES:
-            return Response({"error": "Dataset file is required."}, status=400)
+        if not user:
+            return Response({"error": "User not found."}, status=404)
 
-        # Get Dataset File
-        dataset_file = request.FILES['dataset']
-        
-        # Validate file type and size
-        validate_file_extension(dataset_file.name)
-        # validate_file_size(dataset_file)
+        # Fetch vendors associated with the user
+        vendors = list(db["vendors"].find({"user_id": ObjectId(user_id)}))
 
-        # Read the dataset into memory without saving it to the file system
-        file_bytes = dataset_file.read()
-        df = pd.read_csv(BytesIO(file_bytes))  # Load into pandas dataframe
+        # Prepare vendor data for response
+        vendor_list = []
+        for vendor in vendors:
+            vendor["_id"] = str(vendor["_id"])  # Convert ObjectId to string for JSON response
+            vendor_list.append(vendor)
 
-        # Validate Columns (Assuming `required_columns` is defined)
-        validation_result = validate_columns(df, required_columns)
-        if "error" in validation_result:
-            return Response(validation_result, status=400)
+        return Response({"vendors": vendor_list}, status=200)
 
-        
-
-        # Prepare Dataset Document
-        dataset_data = df.to_dict(orient="records")
-        dataset_document = {
-            "_id": ObjectId(),  # Generate Dataset ID
-            "user_id": ObjectId(user_id),
-            "filename": dataset_file.name,
-            "data": dataset_data,
-            "upload_date": datetime.utcnow().isoformat(),
-        }
-
-        # Insert Dataset into 'datasets' Collection
-        db["datasets"].insert_one(dataset_document)
-
-        # Update User Document with Dataset Reference
-        dataset_info = {
-            "dataset_id": dataset_document["_id"],
-            "filename": dataset_file.name,
-            "upload_date": dataset_document["upload_date"],
-            "status": "uploaded"
-        }
-        db["users"].update_one(
-            {"_id": ObjectId(user_id)},
-            {"$push": {"datasets": dataset_info}}
-        )
-
-        return Response({
-            "message": f"Dataset '{dataset_file.name}' uploaded successfully!",
-            "dataset_id": str(dataset_document["_id"])
-        })
-
-    except ValidationError as e:
-        return Response({"error": str(e)}, status=400)
     except Exception as e:
         return Response({"error": str(e)}, status=500)
-    
+
+
+
+
+
+# @api_view(['POST'])
+# def upload_dataset(request):
+#     try:
+#         # Get User ID
+#         user_id = request.data.get("user_id")
+#         if not user_id:
+#             return Response({"error": "User ID is required."}, status=400)
+
+#         # Check if the user already has a dataset uploaded
+#         user = db["users"].find_one({"_id": ObjectId(user_id)})
+#         if user and user.get("datasets") and len(user["datasets"]) > 0:
+#             return Response({"error": "You can only upload one dataset."}, status=400) 
+#         # Check Dataset File
+#         if 'dataset' not in request.FILES:
+#             return Response({"error": "Dataset file is required."}, status=400)
+
+#         # Get Dataset File
+#         dataset_file = request.FILES['dataset']
+        
+#         # Validate file type and size
+#         validate_file_extension(dataset_file.name)
+#         # validate_file_size(dataset_file)
+
+#         # Read the dataset into memory without saving it to the file system
+#         file_bytes = dataset_file.read()
+#         df = pd.read_csv(BytesIO(file_bytes))  # Load into pandas dataframe
+
+#         # Validate Columns (Assuming `required_columns` is defined)
+#         validation_result = validate_columns(df, required_columns)
+#         if "error" in validation_result:
+#             return Response(validation_result, status=400)
+
+        
+
+        # # Prepare Dataset Document
+        # dataset_data = df.to_dict(orient="records")
+        # dataset_document = {
+        #     "_id": ObjectId(),  # Generate Dataset ID
+        #     "user_id": ObjectId(user_id),
+        #     "filename": dataset_file.name,
+        #     "data": dataset_data,
+        #     "upload_date": datetime.utcnow().isoformat(),
+        # }
+
+#         # Insert Dataset into 'datasets' Collection
+#         db["datasets"].insert_one(dataset_document)
+
+#         # Update User Document with Dataset Reference
+#         dataset_info = {
+#             "dataset_id": dataset_document["_id"],
+#             "filename": dataset_file.name,
+#             "upload_date": dataset_document["upload_date"],
+#             "status": "uploaded"
+#         }
+#         db["users"].update_one(
+#             {"_id": ObjectId(user_id)},
+#             {"$push": {"datasets": dataset_info}}
+#         )
+
+#         return Response({
+#             "message": f"Dataset '{dataset_file.name}' uploaded successfully!",
+#             "dataset_id": str(dataset_document["_id"])
+#         })
+
+#     except ValidationError as e:
+#         return Response({"error": str(e)}, status=400)
+#     except Exception as e:
+#         return Response({"error": str(e)}, status=500)
+
+ 
+#for profile 
+   
 # get details  done
 @api_view(['GET'])
 def get_user_details(request):
@@ -157,6 +435,7 @@ def get_user_details(request):
     
     
 # Create another endpoint to mark the user as "complete" once they press the dashboard button.
+#for login/signup 
 
 @api_view(['POST'])
 def complete_signup(request):
@@ -182,6 +461,7 @@ def complete_signup(request):
 # delete a user based on cancel button while registeration
 # delete a user based on user_id
 # not use yet
+
 @api_view(['POST'])
 def delete_user(request):
     try:
@@ -197,10 +477,9 @@ def delete_user(request):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
-    
-
 # for login donw
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "fallback_secret_key")
+#for login/signup 
 
 @api_view(['POST'])
 def login(request):
@@ -231,6 +510,8 @@ def login(request):
         "userId": str(user["_id"])  # Include userId in the response
     })
 
+#for login/signup 
+
 @api_view(['GET'])
 def validate_token(request):
     token = request.headers.get("Authorization", "").split(" ")[1]  # Get token from the header
@@ -247,6 +528,7 @@ def validate_token(request):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
+#for dashboard counts
 # Path where the dataset files are stored
 @api_view(['GET'])
 def get_total_products(request):
@@ -255,69 +537,127 @@ def get_total_products(request):
         return Response({"error": "User ID is required!"}, status=400)
 
     try:
-        user = db["users"].find_one({"_id": ObjectId(user_id)})
-        if not user:
-            return Response({"error": "User not found!"}, status=404)
+        # Query the `products` collection for all documents associated with this user_id
+        product_documents = db["products"].find({"user_id": ObjectId(user_id)})
+        if not product_documents:
+            return Response({"error": "No products found for this user!"}, status=404)
 
-        # Find the user by user_id
-        user = db["users"].find_one({"_id": ObjectId(user_id)})
-        
-        if not user:
-            return Response({"error": "User not found!"}, status=404)
-        
-        # Get all datasets linked to the user
-        user_datasets = user.get("datasets", [])
-        
-        if not user_datasets:
-            return Response({"error": "No datasets found for this user!"}, status=404)
-        
-        total_unique_products = set()  # To store unique product names
-        low_stock_products = 0  # Counter for low stock products
-        vendors = set()  # Set to store unique vendors  
-         # Define the low stock threshold
-        low_stock_threshold = 5  # Example threshold for low stock (can be adjusted)      
-        for dataset in user_datasets:
-            dataset_id = dataset.get("dataset_id")
-            
-            if not dataset_id:
-                continue  # Skip datasets without an ID
-            
-            # Fetch the dataset from the datasets collection
-            dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
-            
-            if not dataset_record or "data" not in dataset_record:
-                continue  # Skip if dataset is missing or malformed
-            
-            # Extract product data and process
-            for item in dataset_record["data"]:
-                productname = item.get("productname")
-                stockquantity = item.get("stockquantity", 0)
-                reorderthreshold = item.get("reorderthreshold", 0)
-                vendor = item.get("New Vendors")
-                
-                if productname:
-                    total_unique_products.add(productname)  # Add product name to the unique set
-                
-                if stockquantity < low_stock_threshold:
-                    low_stock_products += 1  # Count low stock products
-                
-                if vendor:
-                    vendors.add(vendor)  # Add vendor to the set
-        
-        # Calculate the total number of unique products, vendors, and low stock products
-        total_count = len(total_unique_products)
-        total_vendors = len(vendors)
+        # Initialize counters and sets
+        total_unique_products = set()
+        low_stock_products = 0
+        total_vendors = set()
 
-        # Return the response with all the required details
+        # Low stock threshold
+        low_stock_threshold = 5
+
+        for product_doc in product_documents:
+            # Access the `products` array inside each document
+            products_array = product_doc.get("products", [])
+
+            for product in products_array:
+                # Extract product name and add to unique set
+                product_name = product.get("productname")
+                if product_name:
+                    total_unique_products.add(product_name)
+
+                # Check stock quantity for low stock
+                stock_quantity = product.get("stockquantity", 0)
+                if stock_quantity < low_stock_threshold:
+                    low_stock_products += 1
+
+                # Extract vendor_id and add to unique vendor set
+                vendor_id = product.get("vendor_id")
+                if vendor_id:
+                    total_vendors.add(str(vendor_id))
+
+        # Calculate totals
+        total_unique_products_count = len(total_unique_products)
+        total_vendors_count = len(total_vendors)
+        print(total_unique_products_count)
+        print(low_stock_products)
+        print(total_vendors_count)
+        # Return results
         return Response({
-            "total_unique_products": total_count,
+            "total_unique_products": total_unique_products_count,
             "low_stock_products": low_stock_products,
-            "total_vendors": total_vendors
+            "total_vendors": total_vendors_count
         })
-    
+
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
+
+# @api_view(['GET'])
+# def get_total_products(request):
+#     user_id = request.query_params.get('user_id')
+#     if not user_id:
+#         return Response({"error": "User ID is required!"}, status=400)
+
+#     try:
+#         user = db["users"].find_one({"_id": ObjectId(user_id)})
+#         if not user:
+#             return Response({"error": "User not found!"}, status=404)
+
+#         # Find the user by user_id
+#         user = db["users"].find_one({"_id": ObjectId(user_id)})
+        
+#         if not user:
+#             return Response({"error": "User not found!"}, status=404)
+        
+#         # Get all datasets linked to the user
+#         user_datasets = user.get("datasets", [])
+        
+#         if not user_datasets:
+#             return Response({"error": "No datasets found for this user!"}, status=404)
+        
+#         total_unique_products = set()  # To store unique product names
+#         low_stock_products = 0  # Counter for low stock products
+#         vendors = set()  # Set to store unique vendors  
+#          # Define the low stock threshold
+#         low_stock_threshold = 5  # Example threshold for low stock (can be adjusted)      
+#         for dataset in user_datasets:
+#             dataset_id = dataset.get("dataset_id")
+            
+#             if not dataset_id:
+#                 continue  # Skip datasets without an ID
+            
+#             # Fetch the dataset from the datasets collection
+#             dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
+            
+#             if not dataset_record or "data" not in dataset_record:
+#                 continue  # Skip if dataset is missing or malformed
+            
+#             # Extract product data and process
+#             for item in dataset_record["data"]:
+#                 productname = item.get("productname")
+#                 stockquantity = item.get("stockquantity", 0)
+#                 reorderthreshold = item.get("reorderthreshold", 0)
+#                 vendor = item.get("New Vendors")
+                
+#                 if productname:
+#                     total_unique_products.add(productname)  # Add product name to the unique set
+                
+#                 if stockquantity < low_stock_threshold:
+#                     low_stock_products += 1  # Count low stock products
+                
+#                 if vendor:
+#                     vendors.add(vendor)  # Add vendor to the set
+        
+#         # Calculate the total number of unique products, vendors, and low stock products
+#         total_count = len(total_unique_products)
+#         total_vendors = len(vendors)
+
+#         # Return the response with all the required details
+#         return Response({
+#             "total_unique_products": total_count,
+#             "low_stock_products": low_stock_products,
+#             "total_vendors": total_vendors
+#         })
+    
+#     except Exception as e:
+#         return Response({"error": str(e)}, status=500)
+
+# not used
 # mongodb+srv://syeddaniyalhashmi123:test123@cluster0.dutvq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
 @api_view(['GET'])
 def suggest_vendors_for_user(request):
@@ -358,14 +698,20 @@ def suggest_vendors_for_user(request):
     
     # @api_view(['POST'])
 
+# for dashboard page analysis
 @api_view(['GET'])
 def product_benchmark(request):
     try:
-        # Get the user_id and dataset_id from the query parameters
+        # Get user_id and productname from the query parameters
         user_id = request.query_params.get('user_id')
+        category = request.query_params.get('category', 'Shampoo')  # Default to 'Shampoo'
+        target_product = request.query_params.get('product', None)  # Product to analyze
+
         if not user_id:
             return Response({"error": "User ID is required!"}, status=400)
-
+   
+        if not target_product:
+            return Response({"error": "Product name is missing in the query parameters."}, status=400)
         # Fetch user details from MongoDB
         user = db["users"].find_one({"_id": ObjectId(user_id)})
         if not user:
@@ -375,171 +721,210 @@ def product_benchmark(request):
         user_datasets = user.get("datasets", [])
         if not user_datasets:
             return Response({"error": "No datasets found for this user!"}, status=404)
-        
-        # Fetch the first dataset (you can modify this to handle multiple datasets)
+
+        # Fetch the first dataset
         dataset_id = user_datasets[0].get("dataset_id")
         dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
         if not dataset_record or "data" not in dataset_record:
             return Response({"error": "Dataset not found!"}, status=404)
-        
+
         # Convert dataset into a pandas DataFrame
         df = pd.DataFrame(dataset_record["data"])
 
-        # Calculate product benchmarks
-        benchmarks = calculate_product_benchmarks(df)
+        # Filter products based on the given category
+        category_products = df[df["category"] == category]
+        if category_products.empty:
+            return Response({"error": f"No products found in the category '{category}'!"}, status=404)
 
-        # Sort products by total benchmark score (or any other metric you want to prioritize)
-        sorted_benchmarks = sorted(benchmarks, key=lambda x: x['total_benchmark'], reverse=True)
+        # Find the target product
+        target_product_data = category_products[category_products["productname"] == target_product]
+        if target_product_data.empty:
+            return Response({"error": f"Product '{target_product}' not found!"}, status=404)
 
-        # Select the top 3 benchmarks
-        top_3_benchmarks = sorted_benchmarks[:3]
+        # Fetch 3 competitors randomly
+        competitors = category_products[category_products["productname"] != target_product].sample(n=3, random_state=42)
 
-        # Get vendors associated with these products (assuming 'vendor' is a field in the dataset)
-        # Assuming that a vendor is associated with each product in the dataset
-        vendors = {vendor: [] for vendor in set([item['category'] for item in top_3_benchmarks])}
+        # Combine target product and competitors
+        analysis_df = pd.concat([target_product_data, competitors])
 
-        # Aggregate top vendors for the selected top 3 products
-        for product in top_3_benchmarks:
-            vendor = product['category']  # Assuming 'category' is the vendor here
-            vendors[vendor].append(product)
+        # Calculate benchmarks
+        benchmarks = calculate_product_benchmarks(analysis_df)
 
-        # Get the top 2 vendors based on their product benchmarks
-        top_vendors = sorted(vendors.items(), key=lambda x: sum([product['total_benchmark'] for product in x[1]]), reverse=True)[:2]
-
-        # Prepare the result to return
-        result = {
-            "benchmarks": top_3_benchmarks,
-            "top_vendors": top_vendors
-        }
-
-        # Return the benchmark results
-        return Response(result)
+        return Response({"benchmarks": benchmarks})
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
 
-# Helper function to calculate product benchmarks based on dynamic values
+# for dashboard page analysis(Helper function to calculate product benchmarks)
 def calculate_product_benchmarks(df):
     benchmarks = []
 
-    # Example: Dynamic benchmark based on product features (price, stock, reliability score, etc.)
     for _, row in df.iterrows():
         productname = row.get("productname")
-        category = row.get("category")  # Assuming 'category' represents the vendor
         sellingprice = row.get("sellingprice")
-        stockquantity = row.get("stockquantity")
-        delivery_time = row.get("DeliveryTime")
-        reliability_score = row.get("ReliabilityScore")
+        costprice = row.get("costprice")
         
-        # Check for missing values and set default if necessary
-        if pd.isna(sellingprice):
-            sellingprice = 0
-        if pd.isna(stockquantity):
-            stockquantity = 0
-        if pd.isna(delivery_time):
-            delivery_time = 0
-        if pd.isna(reliability_score):
-            reliability_score = 0
+        # Handle missing values
+        sellingprice = sellingprice if not pd.isna(sellingprice) else 0
+        costprice = costprice if not pd.isna(costprice) else 0
 
-        # Example benchmark calculations (can be adjusted as needed)
-        price_benchmark = sellingprice / 100  # Normalize price for benchmark
-        stock_benchmark = 100 - (stockquantity / 100)  # Lower stock -> higher benchmark
-        delivery_benchmark = 10 - (delivery_time / 2)  # Shorter delivery time -> higher benchmark
-        reliability_benchmark = reliability_score * 10  # Higher reliability score -> higher benchmark
+        # Calculate profit margin
+        profitmargin = (sellingprice - costprice) / sellingprice * 100 if sellingprice else 0
 
-        # Aggregate the benchmarks into a single value (this can be adjusted based on your logic)
-        total_benchmark = (price_benchmark + stock_benchmark + delivery_benchmark + reliability_benchmark) / 4
-
-        # Append the product's benchmark data
         benchmarks.append({
             "productname": productname,
-            "category": category,
-            "price_benchmark": price_benchmark,
-            "stock_benchmark": stock_benchmark,
-            "delivery_benchmark": delivery_benchmark,
-            "reliability_benchmark": reliability_benchmark,
-            "total_benchmark": total_benchmark
+            "sellingprice": sellingprice,
+            "profitmargin": profitmargin,
         })
     
     return benchmarks
-# def product_benchmark(request):
-#     try:
-#         # Get the user_id and dataset_id from the query parameters
-#         user_id = request.query_params.get('user_id')
-#         if not user_id:
-#             return Response({"error": "User ID is required!"}, status=400)
-
-#         # Fetch user details from MongoDB
-#         user = db["users"].find_one({"_id": ObjectId(user_id)})
-#         if not user:
-#             return Response({"error": "User not found!"}, status=404)
-
-#         # Fetch the user's dataset
-#         user_datasets = user.get("datasets", [])
-#         if not user_datasets:
-#             return Response({"error": "No datasets found for this user!"}, status=404)
-        
-#         # Fetch the first dataset (you can modify this to handle multiple datasets)
-#         dataset_id = user_datasets[0].get("dataset_id")
-#         dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
-#         if not dataset_record or "data" not in dataset_record:
-#             return Response({"error": "Dataset not found!"}, status=404)
-        
-#         # Convert dataset into a pandas DataFrame
-#         df = pd.DataFrame(dataset_record["data"])
-
-#         # Calculate product benchmarks
-#         benchmarks = calculate_product_benchmarks(df)
-
-#         # Return the benchmark results
-#         return Response({"benchmarks": benchmarks})
-
-#     except Exception as e:
-#         return Response({"error": str(e)}, status=500)
 
 
-# # Helper function to calculate product benchmarks based on dynamic values
-# def calculate_product_benchmarks(df):
-#     benchmarks = []
+#to show dataset in invenoty page
 
-#     # Example: Dynamic benchmark based on product features (price, stock, reliability score, etc.)
-#     for _, row in df.iterrows():
-#         productname = row.get("productname")
-#         category = row.get("category")
-#         sellingprice = row.get("sellingprice")
-#         stockquantity = row.get("stockquantity")
-#         delivery_time = row.get("DeliveryTime")
-#         reliability_score = row.get("ReliabilityScore")
-        
-#         # Check for missing values and set default if necessary
-#         if pd.isna(sellingprice):
-#             sellingprice = 0
-#         if pd.isna(stockquantity):
-#             stockquantity = 0
-#         if pd.isna(delivery_time):
-#             delivery_time = 0
-#         if pd.isna(reliability_score):
-#             reliability_score = 0
+@api_view(['GET'])
+def get_current_dataset(request):
+    user_id = request.GET.get("user_id", None)
 
-#         # Example benchmark calculations (can be adjusted as needed)
-#         price_benchmark = sellingprice / 100  # Normalize price for benchmark
-#         stock_benchmark = 100 - (stockquantity / 100)  # Lower stock -> higher benchmark
-#         delivery_benchmark = 10 - (delivery_time / 2)  # Shorter delivery time -> higher benchmark
-#         reliability_benchmark = reliability_score * 10  # Higher reliability score -> higher benchmark
+    if not user_id:
+        return Response({"error": "Missing user_id"}, status=400)
 
-#         # Aggregate the benchmarks into a single value (this can be adjusted based on your logic)
-#         total_benchmark = (price_benchmark + stock_benchmark + delivery_benchmark + reliability_benchmark) / 4
+    # Find the user's dataset from MongoDB
+    dataset = db["datasets"].find_one({"user_id": ObjectId(user_id)})
+    if not dataset:
+        return Response({"error": "No dataset found for the user."}, status=404)
 
-#         # Append the product's benchmark data
-#         benchmarks.append({
-#             "productname": productname,
-#             "category": category,
-#             "price_benchmark": price_benchmark,
-#             "stock_benchmark": stock_benchmark,
-#             "delivery_benchmark": delivery_benchmark,
-#             "reliability_benchmark": reliability_benchmark,
-#             "total_benchmark": total_benchmark
-#         })
-    
-#     return benchmarks
+    try:
+        # Fetch the actual dataset and format it similarly to the dummy data
+        data = dataset.get("data", [])
+        if not data:
+            return Response({"error": "Dataset is empty."}, status=404)
+
+        # Format the dataset as you need for the frontend
+        formatted_data = {
+            "data": data
+        }
+
+        # Return the dataset in the same structure as the dummy data
+        return Response(formatted_data)
+
+    except Exception as e:
+        # Log the exception for debugging
+        print(f"Error: {e}")
+        return Response({"error": "Internal server error"}, status=500)
+
+# for visulization to show in invenoty page
+@api_view(['GET'])
+def get_inventory_visuals(request):
+    try:
+        # Get the user_id from the query parameters
+        user_id = request.query_params.get('user_id')
+        if not user_id:
+            return Response({"error": "User ID is required!"}, status=400)
+
+        # Fetch user datasets
+        user = db["users"].find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return Response({"error": "User not found!"}, status=404)
+
+        # Fetch the user's dataset
+        user_datasets = user.get("datasets", [])
+        if not user_datasets:
+            return Response({"error": "No datasets found for this user!"}, status=404)
+
+        # Fetch the first dataset
+        dataset_id = user_datasets[0].get("dataset_id")
+        dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
+        if not dataset_record or "data" not in dataset_record:
+            return Response({"error": "Dataset not found!"}, status=404)
+
+        # Convert dataset into a pandas DataFrame
+        df = pd.DataFrame(dataset_record["data"])
+
+        # 1. Category-wise Profit Margin
+        df['profit_margin'] = (df['sellingprice'] - df['costprice']) / df['costprice'] * 100
+        category_profit_margin = df.groupby('category')['profit_margin'].mean().reset_index()
+        category_profit_margin = category_profit_margin.to_dict(orient='records')
+
+        # 2. Category-wise Cost
+        category_cost = df.groupby('category')['costprice'].sum().reset_index()
+        category_cost = category_cost.to_dict(orient='records')
+
+        # 3. Product-wise Profit Margin (horizontal bar chart)
+        product_profit_margin = df[['productname', 'profit_margin']].sort_values(by='profit_margin', ascending=False).head(10)
+        product_profit_margin = product_profit_margin.to_dict(orient='records')
+
+        # 4. Comparison of Selling Price and Cost Price
+        product_price_comparison = df[['productname', 'sellingprice', 'costprice']].head(10)
+        product_price_comparison = product_price_comparison.to_dict(orient='records')
+
+        # Return data for visualizations
+        return Response({
+            "category_profit_margin": category_profit_margin,
+            "category_cost": category_cost,
+            "product_profit_margin": product_profit_margin,
+            "product_price_comparison": product_price_comparison,
+        })
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+@api_view(['GET'])
+def get_insights_visuals(request):
+    try:
+        # Get the user_id from the query parameters
+        user_id = request.query_params.get('user_id')
+        if not user_id:
+            return Response({"error": "User ID is required!"}, status=400)
+
+        # Fetch user datasets
+        user = db["users"].find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return Response({"error": "User not found!"}, status=404)
+
+        # Fetch the user's dataset
+        user_datasets = user.get("datasets", [])
+        if not user_datasets:
+            return Response({"error": "No datasets found for this user!"}, status=404)
+
+        # Fetch the first dataset
+        dataset_id = user_datasets[0].get("dataset_id")
+        dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
+        if not dataset_record or "data" not in dataset_record:
+            return Response({"error": "Dataset not found!"}, status=404)
+
+        # Convert dataset into a pandas DataFrame
+        df = pd.DataFrame(dataset_record["data"])
+         # 1. Product Benchmarking: Compare 3 products in the same category based on selling price and profit margin.
+        selected_category = "Electronics"  # Example category (you can make this dynamic)
+        benchmarking_products = df[df['category'] == selected_category].head(3)
+        benchmarking_data = benchmarking_products.assign(
+            profit_margin=benchmarking_products['sellingprice'] - benchmarking_products['costprice']
+        )[["productname", "sellingprice", "profit_margin"]].to_dict(orient="records")
+
+        # 2. Identify Low Stock Products
+        low_stock_products = df[df['stockquantity'] < df['reorderthreshold']]
+        low_stock_data = low_stock_products[["productname", "category", "New Vendors", "stockquantity"]].to_dict(orient="records")
+
+        # 3. Best Vendor Suggestion
+        vendor_scores = (
+            df.groupby('vendor')
+            .agg(
+                avg_reliability=('ReliabilityScore', 'mean'),
+                avg_delivery_time=('DeliveryTime', 'mean'),
+            )
+            .sort_values(by=['avg_reliability', 'avg_delivery_time'], ascending=[False, True])
+            .head(3)
+            .reset_index()
+            .to_dict(orient="records")
+        )
+
+        return Response({
+            "benchmarking_data": benchmarking_data,
+            "low_stock_data": low_stock_data,
+            "vendor_suggestions": vendor_scores,
+        })
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
