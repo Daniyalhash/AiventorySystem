@@ -648,7 +648,7 @@ def get_insights_visuals(request):
         return Response({"error": str(e)}, status=500)
 
 # 
-
+#for dashboard
 # Path where the dataset files are stored
 @api_view(['GET'])
 def get_total_products(request):
@@ -735,6 +735,7 @@ def get_products(request):
     ]
     
     return JsonResponse({"products": products})
+# for insghts
 
 # Fetch unique categories from the product dataset / done
 @api_view(['GET'])
@@ -770,6 +771,7 @@ def get_categories(request):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
+# for insghts
 
 def convert_objectid(data):
     if isinstance(data, dict):
@@ -779,6 +781,7 @@ def convert_objectid(data):
     elif isinstance(data, ObjectId):
         return str(data)
     return data
+# for insghts
 
 @api_view(['GET'])
 def get_top_products_by_category(request):
@@ -843,6 +846,7 @@ def get_top_products_by_category(request):
         import traceback
         print(traceback.format_exc())  # Print stack trace for debugging
         return Response({"error": str(e)}, status=500)
+# for insghts
 
 
 
@@ -850,8 +854,8 @@ def calculate_profit_margin(selling_price, cost_price):
     if selling_price == 0:
         return 0
     return ((selling_price - cost_price) / selling_price) * 100
-
-
+# for insghts
+# this is for profit margin graph
 
 @api_view(['GET'])
 def get_products_by_name(request):
@@ -936,12 +940,11 @@ def get_products_by_name(request):
                         "ReliabilityScore": ReliabilityScore 
                     })
 
-        # Get the top 5 products
-        top_5_products = products_in_category[:5]
+        # Print the number of products
+        print(f"Number of products in category '{category}': {len(products_in_category)}")
 
         # Convert ObjectIds to strings for serialization
-        converted_data = convert_objectid(top_5_products)
-        print(top_5_products)
+        converted_data = convert_objectid(products_in_category)
         print("vendor found",vendorName)
         return Response({
             "products": converted_data
@@ -951,325 +954,328 @@ def get_products_by_name(request):
         import traceback
         print(traceback.format_exc())  # Print stack trace for debugging
         return Response({"error": str(e)}, status=500)
-#error
+
+
+# for insghts
+
+# Fetch unique categories from the product dataset / done
 @api_view(['GET'])
-def get_vendor_by_name(request):
+def get_categories_p(request):
     user_id = request.query_params.get('user_id')
-    
     if not user_id:
         return Response({"error": "User ID is required!"}, status=400)
-    
-    
 
     try:
-        # Validate user_id
+        # Query the `products` collection for all documents associated with this user_id
+        product_documents = db["products"].find({"user_id": ObjectId(user_id)})
+        if not product_documents:
+            return Response({"error": "No products found for this user!"}, status=404)
+
+        low_stock_product_list = []
+        
+        for product_doc in product_documents:
+            # Access the `products` array
+            products_array = product_doc.get("products", [])
+            if not isinstance(products_array, list):
+                continue  # Skip invalid products field
+
+            for product in products_array:
+                stockquantity = product.get("stockquantity", 0)
+                reorderthreshold = product.get("reorderthreshold", 0)
+                category = product.get("category", "N/A")
+                vendor_id = product.get("vendor_id", "N/A")
+
+                # Identify low stock products (stockquantity < reorderthreshold)
+                if stockquantity < reorderthreshold:
+                    print("Low stock product found:", product.get("productname"))  # Print low stock product
+                    low_stock_product_list.append({
+                        "productname": product.get("productname"),
+                        "category": category,
+                        "stockquantity": stockquantity,
+                        "vendor_id": str(vendor_id)  # Convert ObjectId to string
+
+                    })
+
+        print("Here is the list of low stock products:", low_stock_product_list)
+        return Response({"low_stock_products": low_stock_product_list})
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+from rest_framework.response import Response
+from rest_framework.decorators import api_view
+from bson import ObjectId
+import traceback
+
+
+
+@api_view(['GET'])
+def get_vendor_details(request):
+    user_id = request.query_params.get('user_id')
+    category = request.query_params.get('category')
+    productname = request.query_params.get('productname')
+
+    # Validate required parameters
+    if not user_id:
+        return Response({"error": "User ID is required!"}, status=400)
+    if not category:
+        return Response({"error": "Category is required!"}, status=400)
+    if not productname:
+        return Response({"error": "Product name is required!"}, status=400)
+
+    try:
+        # Validate `user_id` format
         try:
             user_id = ObjectId(user_id)
         except Exception:
             return Response({"error": "Invalid User ID format!"}, status=400)
 
- 
-         # Query the `vendors` collection for the given user_id
-        vendors_documents = list(db["vendors"].find({"user_id": user_id}))
-        if len(vendors_documents) == 0:
-            return Response({"error": "No vendors found for this user!"}, status=404)
+        # Query the `products` collection for products by the user
+        product_documents = list(db["products"].find({"user_id": user_id}))
+        if not product_documents:
+            return Response({"error": "No products found for this user!"}, status=404)
 
-        # Initialize an array to hold products of the selected category
-        vendor_found= []
+        # Initialize response variables
+        product_found = None
+        vendor_ids = set()
 
-        for vendor_doc in vendors_documents:
-            # Access the `products` array
-            vendor_found = vendor_doc.get("vendors", [])
-            if not isinstance(vendor_found, list):
-                continue  # Skip invalid products field
+        # Find the product in the specified category
+        for product_doc in product_documents:
+            for product in product_doc.get("products", []):
+                if product.get("category") == category and product.get("productname") == productname:
+                    product_found = product
+                    vendor_ids.add(str(product.get("vendor_id")))  # Add vendor_id to the set
+                    break
+            if product_found:
+                break  # Exit loop when the product is found
 
-            for vendor in vendor_found:
-                # Only add products that match the selected category
+        if not product_found:
+            return Response({"error": "Product not found in the specified category!"}, status=404)
 
-                    vendor_found.append({
-            
-                        "vendor": vendor.get("vendor") ,
-                        "DeliveryTime": vendor.get("DeliveryTime"), 
-                        "ReliabilityScore": vendor.get("ReliabilityScore") 
-                    
-                    })
+        # Query the `vendors` collection for the vendor details
+        vendors = list(db["vendors"].find({"_id": {"$in": [ObjectId(vendor_id) for vendor_id in vendor_ids]}}))
 
-        # Get the top 5 products
-        top_5_vendor = vendor_found[:5]
+        if not vendors:
+            return Response({"error": "No vendor details found for this product!"}, status=404)
 
-        # Convert ObjectIds to strings for serialization
-        converted_data = convert_objectid(top_5_vendor)
-        print(top_5_vendor)
-        # Example usage
-        # userid = "676ec0b6165c0a9d91429edd"  
-        # vendorid = "676ec0bc165c0a9d91429ede"
-        # result = get_vendor_now(user_id, vendor_id)
-        # print(result)  
-        return Response({
-            "products": converted_data
-        })
+        # Build the vendor details response
+        vendor_list = []
+        for vendor in vendors:
+            vendor_details = {
+                "vendor": vendor.get("vendor", "Unknown Vendor"),
+                "DeliveryTime": vendor.get("DeliveryTime", "Unknown DeliveryTime"),
+                "ReliabilityScore": vendor.get("ReliabilityScore", "Unknown ReliabilityScore")
+            }
+            vendor_list.append(vendor_details)
 
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())  # Print stack trace for debugging
-        return Response({"error": str(e)}, status=500) 
-
-#imp
-# @api_view(['GET'])
-# def get_products_by_name(request):
-#     user_id = request.query_params.get('user_id')
-#     category = request.query_params.get('category')
-#     vendor_id = request.query_params.get('vendor_id')
-
-#     if not user_id:
-#         return Response({"error": "User ID is required!"}, status=400)
-    
-#     if not category:
-#         return Response({"error": "Category is required!"}, status=400)
-#     if not vendor_id:
-#         return Response({"error": "vendor_id is required!"}, status=400)
-#     try:
-#         # Validate user_id
-#         try:
-#             user_id = ObjectId(user_id)
-#         except Exception:
-#             return Response({"error": "Invalid User ID format!"}, status=400)
-
-#         # Query the `products` collection
-#         product_documents = list(db["products"].find({"user_id": user_id}))
-#         if len(product_documents) == 0:
-#             return Response({"error": "No products found for this user!"}, status=404)
-#          # Query the `vendors` collection for the given user_id
-#         vendors = list(db["vendors"].find({"user_id": user_id}))
-#         if len(vendors) == 0:
-#             return Response({"error": "No vendors found for this user!"}, status=404)
-
-#         # Initialize an array to hold products of the selected category
-#         products_in_category = []
-
-#         for product_doc in product_documents:
-#             # Access the `products` array
-#             products_array = product_doc.get("products", [])
-#             if not isinstance(products_array, list):
-#                 continue  # Skip invalid products field
-
-#             for product in products_array:
-#                 # Only add products that match the selected category
-#                 if product.get("category") == category:
-#                     selling_price = product.get("sellingprice", 0)
-#                     cost_price = product.get("costprice", 0)
-#                     profitmargin = calculate_profit_margin(selling_price, cost_price)
-                
-#                     products_in_category.append({
-#                         "productname": product.get("productname"),
-#                         "category": product.get("category"),
-#                         "stockquantity": product.get("stockquantity"),
-#                         "sellingprice": selling_price,
-#                         "Barcode": product.get("Barcode"),
-#                         "expirydate": product.get("expirydate"),
-#                         "reorderthreshold": product.get("reorderthreshold"),
-#                         "costprice": cost_price,
-#                         "profitmargin": profitmargin,
-#                        "id": str(product.get("_id", "")),
-                       
-#                     })
-
-#         # Get the top 5 products
-#         top_5_products = products_in_category[:5]
-
-#         # Convert ObjectIds to strings for serialization
-#         converted_data = convert_objectid(top_5_products)
-#         print(top_5_products)
-     
-#         return Response({
-#             "products": converted_data
-#         })
-
-#     except Exception as e:
-#         import traceback
-#         print(traceback.format_exc())  # Print stack trace for debugging
-#         return Response({"error": str(e)}, status=500)
-
-def get_vendor_now(userid, vendorid):
-    try:
-        # Validate if user exists
-        print(f"Looking for user with ID: {userid}")  # Debugging
-        user = db.users.find_one({"_id": ObjectId(userid)})
-        if not user:
-            return {"error": "User not found."}
-        print(f"User found: {user}")  # Debugging
-
-        # Fetch vendor by vendor_id and user_id from the vendors collection
-        print(f"Looking for vendor with ID: {vendorid} and user ID: {userid}")  # Debugging
-        vendor = db.vendors.find_one(
-            {"_id": ObjectId(vendorid), "user_id": ObjectId(userid)}
-        )
-
-        if not vendor:
-            # Check if the vendor exists without matching user_id (for debugging purposes)
-            print("Trying without matching user_id")  # Debugging
-            vendor = db.vendors.find_one({"_id": ObjectId(vendorid)})
-            if not vendor:
-                return {"error": "Vendor not found."}
-            return {"error": f"Vendor found, but user_id does not match. Vendor user_id: {vendor['user_id']}"}
-
-        # Convert ObjectId to string for JSON-like response
-        vendor["_id"] = str(vendor["_id"])
-        vendor["user_id"] = str(vendor["user_id"])
-
-        return {"vendor": vendor}
-
-    except Exception as e:
-        return {"error": str(e)}
-# # Mock database
-# db3 = {
-#     "users1": [
-#         {"_id": ObjectId("676ec0bc165c0a9d91429ede")},
-#     ],
-#     "vendors1": [
-#         {"_id": ObjectId("64c8efb2a45cd32598f3b5f7"), "user_id": ObjectId("676ec0bc165c0a9d91429ede"), "name": "Vendor A"},
-#         {"_id": ObjectId("64c8efb2a45cd32598f3b5f8"), "user_id": ObjectId("676ec0bc165c0a9d91429ede"), "name": "Vendor B"},
-#     ]
-# }
-
-# def get_vendor_now(userid, vendorid):
-#     try:
-#         # Validate if user exists
-#         user = next((u for u in db3["users1"] if u["_id"] == ObjectId(userid)), None)
-#         if not user:
-#             return {"error": "User not found."}
-
-#         # Fetch vendor by vendor_id and user_id
-#         vendor = next(
-#             (v for v in db3["vendors1"] if v["_id"] == ObjectId(vendorid) and v["user_id"] == ObjectId(userid)),
-#             None
-#         )
-
-#         if not vendor:
-#             return {"error": "Vendor not found."}
-
-#         # Convert ObjectId to string for JSON-like response
-#         vendor["_id"] = str(vendor["_id"])
-#         vendor["user_id"] = str(vendor["user_id"])
-
-#         return {"vendor": vendor}
-
-#     except Exception as e:
-#         return {"error": str(e)}
-
-
-
-# @api_view(['GET'])
-# def get_products_by_name(request):
-#     user_id = request.query_params.get('user_id')
-#     category = request.query_params.get('category')
-    
-#     if not user_id:
-#         return Response({"error": "User ID is required!"}, status=400)
-    
-#     if not category:
-#         return Response({"error": "Category is required!"}, status=400)
-
-#     try:
-#         # Validate user_id
-#         try:
-#             user_id = ObjectId(user_id)
-#         except Exception:
-#             return Response({"error": "Invalid User ID format!"}, status=400)
-
-#         # Query the `products` collection
-#         product_documents = list(db["products"].find({"user_id": user_id}))
-#         if len(product_documents) == 0:
-#             return Response({"error": "No products found for this user!"}, status=404)
-#          # Query the `vendors` collection for the given user_id
-#         vendors = list(db["vendors"].find({"user_id": user_id}))
-#         if len(vendors) == 0:
-#             return Response({"error": "No vendors found for this user!"}, status=404)
-
-#         # Initialize an array to hold products of the selected category
-#         products_in_category = []
-
-#         for product_doc in product_documents:
-#             # Access the `products` array
-#             products_array = product_doc.get("products", [])
-#             if not isinstance(products_array, list):
-#                 continue  # Skip invalid products field
-
-#             for product in products_array:
-#                 # Only add products that match the selected category
-#                 if product.get("category") == category:
-#                     selling_price = product.get("sellingprice", 0)
-#                     cost_price = product.get("costprice", 0)
-#                     profitmargin = calculate_profit_margin(selling_price, cost_price)
-                    
-#                     # Find vendor info
-#                     vendor_id = product.get("vendor_id")
-#                     vendor_info = None
-#                     if vendor_id:
-#                         # Check if the vendor_id matches any vendor in the user's vendors
-#                         vendor_info = next(
-#                             (vendor for vendor in vendors if str(vendor["_id"]) == str(vendor_id)),
-#                             None
-#                         )
-
-#                     products_in_category.append({
-#                         "productname": product.get("productname"),
-#                         "category": product.get("category"),
-#                         "stockquantity": product.get("stockquantity"),
-#                         "sellingprice": selling_price,
-#                         "Barcode": product.get("Barcode"),
-#                         "expirydate": product.get("expirydate"),
-#                         "reorderthreshold": product.get("reorderthreshold"),
-#                         "costprice": cost_price,
-#                         "profitmargin": profitmargin,
-#                        "id": str(product.get("_id", "")),
-#                         "vendor_info": {
-#                             "vendor": vendor_info.get("vendor") if vendor_info else None,
-#                             "DeliveryTime": vendor_info.get("DeliveryTime") if vendor_info else None,
-#                             "ReliabilityScore": vendor_info.get("ReliabilityScore") if vendor_info else None,
-#                         }
-#                     })
-
-#         # Get the top 5 products
-#         top_5_products = products_in_category[:5]
-
-#         # Convert ObjectIds to strings for serialization
-#         converted_data = convert_objectid(top_5_products)
-#         print(top_5_products)
-#         userid = "676ec0bc165c0a9d91429ede"
-#         vendorid = "64c8efb2a45cd32598f3b5f7"
-#         result = get_vendor_now(userid, vendorid)
-#         print(result)   
-#         return Response({
-#             "products": converted_data
-#         })
-
-#     except Exception as e:
-#         import traceback
-#         print(traceback.format_exc())  # Print stack trace for debugging
-#         return Response({"error": str(e)}, status=500)
-@api_view(['GET'])
-def get_vendor_by_id(request):
-    try:
-        # Fetch Vendor ID from request parameters
-        vendor_id = request.query_params.get("vendor_id")
-        if not vendor_id:
-            return Response({"error": "Vendor ID is required."}, status=400)
-
-        # Validate if Vendor ID is in proper ObjectId format
-        try:
-            vendor_object_id = ObjectId(vendor_id)
-        except Exception:
-            return Response({"error": "Invalid Vendor ID format."}, status=400)
-
-        # Access the vendor from the database
-        vendor = db["vendors"].find_one({"_id": vendor_object_id})
-        if not vendor:
-            return Response({"error": "Vendor not found."}, status=404)
-
-        # Prepare and return the vendor data
-        vendor["_id"] = str(vendor["_id"])  # Convert ObjectId to string for JSON response
-        return Response({"vendor": vendor}, status=200)
+        # If multiple vendors exist, return them
+        print("wah bahi",vendor_details)
+        if len(vendor_list) > 1:
+            return Response({
+                "product": productname,
+                "category": category,
+                "multiple_vendors": vendor_list
+            }, status=200)
+        else:
+            return Response({"error": "Product does not have multiple vendors!"}, status=404)
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+
+
+@api_view(['GET'])
+def get_vendor_details(request):
+    user_id = request.query_params.get('user_id')
+    category = request.query_params.get('category')
+    vendor_id = request.query_params.get('vendor_id')
+    productname = request.query_params.get('productname')
+
+    # Validate required parameters
+    if not user_id:
+        return Response({"error": "User ID is required!"}, status=400)
+    if not category:
+        return Response({"error": "Category is required!"}, status=400)
+    if not vendor_id:
+        return Response({"error": "vendor_id is required!"}, status=400)
+    if not productname:
+        return Response({"error": "productname is required!"}, status=400)
+
+    try:
+        # Validate `user_id` format
+        try:
+            user_id = ObjectId(user_id)
+        except Exception:
+            return Response({"error": "Invalid User ID format!"}, status=400)
+
+        # Query the `products` collection
+        product_documents = list(db["products"].find({"user_id": user_id}))
+        if not product_documents:
+            return Response({"error": "No products found for this user!"}, status=404)
+
+        # Query the `vendors` collection for the given `user_id`
+        vendor_documents = list(db["vendors"].find({"user_id": user_id}))
+        if not vendor_documents:
+            return Response({"error": "No vendors found for this user!"}, status=404)
+
+        # Initialize response variables
+        product_found = None
+        vendor_info = None
+        vendor_list = []
+
+        # Check for the specified product in the given category
+        for product_doc in product_documents:
+            for product in product_doc.get("products", []):
+                if product.get("category") == category and product.get("productname") == productname:
+                    product_found = product
+                    break
+            if product_found:
+                break  # Exit loop when the product is found
+
+        if not product_found:
+            return Response({"error": "Product not found in the specified category!"}, status=404)
+
+        # Check for the vendor details
+        for vendor_doc in vendor_documents:
+            for vendor in vendor_doc.get("vendors", []):
+                if str(vendor.get("_id")) == vendor_id:
+                    vendor_info = {
+                        "vendor": vendor.get("vendor", "Unknown Vendor"),
+                        "DeliveryTime": vendor.get("DeliveryTime", "Unknown DeliveryTime"),
+                        "ReliabilityScore": vendor.get("ReliabilityScore", "Unknown ReliabilityScore")
+                    }
+                    vendor_list.append(vendor_info)
+        if not vendor_info:
+            return Response({"error": "Vendor not found!"}, status=404)
+
+            
+        print("Double vendor aere",vendor_list)
+        return Response(vendor_list, status=200)
+
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())  # Debug stack trace
+        return Response({"error": str(e)}, status=500)
+
+    
+
+
+@api_view(['GET'])
+def get_lowVendor(request):
+    user_id = request.query_params.get('user_id')
+    product_id = request.query_params.get('product_id')
+
+    if not user_id:
+        return Response({"error": "User ID is required!"}, status=400)
+    if not product_id:
+        return Response({"error": "Product ID is required!"}, status=400)
+
+    try:
+        # Convert IDs to ObjectId format
+        try:
+            user_id = ObjectId(user_id)
+            product_id = ObjectId(product_id)
+        except Exception:
+            return Response({"error": "Invalid ID format!"}, status=400)
+
+        # Fetch product details from `products` collection
+        product_document = db["products"].find_one({"user_id": user_id, "products._id": product_id})
+        if not product_document:
+            return Response({"error": "Product not found!"}, status=404)
+
+        # Find the product within the products array
+        product_data = next(
+            (product for product in product_document.get("products", []) if product.get("_id") == product_id),
+            None
+        )
+        if not product_data:
+            return Response({"error": "Product not found in products array!"}, status=404)
+
+        vendor_ids = product_data.get("vendor_ids", [])
+        if not isinstance(vendor_ids, list) or not vendor_ids:
+            return Response({"error": "Vendor IDs not found or invalid for the product!"}, status=404)
+
+        # Fetch vendor details from `vendors` collection
+        vendors = list(db["vendors"].find({"user_id": user_id, "vendors._id": {"$in": vendor_ids}}))
+
+        vendor_details = []
+        for vendor_doc in vendors:
+            for vendor in vendor_doc.get("vendors", []):
+                if vendor.get("_id") in vendor_ids:
+                    vendor_details.append({
+                        "vendor_name": vendor.get("vendor", "Unknown Vendor"),
+                        "delivery_time": vendor.get("DeliveryTime", "Unknown DeliveryTime"),
+                        "reliability_score": vendor.get("ReliabilityScore", "Unknown ReliabilityScore"),
+                        "vendor_id": str(vendor.get("_id"))
+                    })
+
+        response_data = {
+            
+            "vendors": vendor_details
+        }
+
+        return Response(response_data, status=200)
+
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())  # Debugging
+        return Response({"error": str(e)}, status=500)
+
+# "product": {
+#                 "productname": product_data.get("productname"),
+#                 "category": product_data.get("category"),
+#                 "stockquantity": product_data.get("stockquantity"),
+#                 "sellingprice": product_data.get("sellingprice"),
+#                 "costprice": product_data.get("costprice"),
+#                 "profitmargin": calculate_profit_margin(
+#                     product_data.get("sellingprice", 0),
+#                     product_data.get("costprice", 0)
+#                 ),
+#                 "barcode": product_data.get("Barcode"),
+#                 "expirydate": product_data.get("expirydate"),
+#                 "reorderthreshold": product_data.get("reorderthreshold"),
+#                 "product_id": str(product_data.get("_id", ""))
+#             },
+# Helper function to calculate profit margin
+# def calculate_profit_margin(selling_price, cost_price):
+#     if cost_price == 0:
+#         return 0
+#     return round(((selling_price - cost_price) / cost_price) * 100, 2)
+
+
+
+@api_view(['GET'])
+def get_low_stock_products(request):
+    user_id = request.query_params.get('user_id')
+    if not user_id:
+        return Response({"error": "User ID is required!"}, status=400)
+
+    try:
+        # Query the `products` collection for all documents associated with this user_id
+        product_documents = db["products"].find({"user_id": ObjectId(user_id)})
+        if not product_documents:
+            return Response({"error": "No products found for this user!"}, status=404)
+
+        # Initialize a set to hold unique categories
+        unique_categories = set()
+
+        for product_doc in product_documents:
+            # Access the `products` array inside each document
+            products_array = product_doc.get("products", [])
+
+            for product in products_array:
+                # Extract category and add to unique categories set
+                category = product.get("category")
+                if category:
+                    unique_categories.add(category)
+
+        # Return the list of unique categories
+        return Response({
+            "categories": list(unique_categories)
+        })
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+
+
+
+  

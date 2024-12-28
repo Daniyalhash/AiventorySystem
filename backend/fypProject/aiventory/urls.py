@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import signup, login, validate_token,upload_dataset,complete_signup,get_user_details,get_total_products,product_benchmark,get_current_dataset,get_inventory_visuals,get_insights_visuals,get_vendor,get_categories,get_top_products_by_category,get_products_by_name,get_vendor_by_id,get_vendor_by_name
+from .views import signup, login, validate_token,upload_dataset,complete_signup,get_user_details,get_total_products,product_benchmark,get_current_dataset,get_inventory_visuals,get_insights_visuals,get_vendor,get_categories,get_top_products_by_category,get_products_by_name,get_low_stock_products,get_categories_p,get_lowVendor,get_vendor_details
 
 urlpatterns = [
     path('signup/', signup, name='signup'),
@@ -17,9 +17,13 @@ urlpatterns = [
     
     path('get-top-products-by-category/',get_top_products_by_category, name='get_top_products_by_category'),
     path('get-categories/',get_categories, name='get_categories'),
-        path('get-products-by-name/',get_products_by_name, name='get_products_by_name'),
-        path('get-vendor-by-id/',get_vendor_by_id, name='get_vendor_by_id'),
-        path('get-vendor-by-name/',get_vendor_by_name, name='get_vendor_by_name'),
+        path('get-categories-p/',get_categories_p, name='get_categories_p'),
+    path('get-lowVendor/',get_lowVendor, name='get_lowVendor'),
 
-    # path('search-product-by-barcode/',search_product_by_barcode, name='search_product_by_barcode'),
+        path('get-products-by-name/',get_products_by_name, name='get_products_by_name'),
+        # path('get-vendor-by-id/',get_vendor_by_id, name='get_vendor_by_id'),
+    path('get-low-stock-products/',get_low_stock_products, name='get_low_stock_products'),
+        path('get-vendor-details/',get_vendor_details, name='get_vendor_details')
+
+
 ]
