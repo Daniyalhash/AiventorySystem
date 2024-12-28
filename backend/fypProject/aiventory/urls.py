@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import signup, login, validate_token,upload_dataset,complete_signup,get_user_details,get_total_products,product_benchmark,get_current_dataset,get_inventory_visuals,get_insights_visuals,get_vendors
+from .views import signup, login, validate_token,upload_dataset,complete_signup,get_user_details,get_total_products,product_benchmark,get_current_dataset,get_inventory_visuals,get_insights_visuals,get_vendor,get_categories,get_top_products_by_category,get_products_by_name,get_vendor_by_id,get_vendor_by_name
 
 urlpatterns = [
     path('signup/', signup, name='signup'),
@@ -13,6 +13,13 @@ urlpatterns = [
     path('get-current-dataset/',get_current_dataset, name='get_current_dataset'),
     path('get-inventory-visuals/',get_inventory_visuals, name='get_inventory_visuals'),
     path('get-insights-visuals/',get_insights_visuals, name='get_insights_visuals'),
-    path('get-vendors/',get_vendors, name='get_vendors'),
+    path('get-vendor/',get_vendor, name='get_vendor'),
+    
+    path('get-top-products-by-category/',get_top_products_by_category, name='get_top_products_by_category'),
+    path('get-categories/',get_categories, name='get_categories'),
+        path('get-products-by-name/',get_products_by_name, name='get_products_by_name'),
+        path('get-vendor-by-id/',get_vendor_by_id, name='get_vendor_by_id'),
+        path('get-vendor-by-name/',get_vendor_by_name, name='get_vendor_by_name'),
 
+    # path('search-product-by-barcode/',search_product_by_barcode, name='search_product_by_barcode'),
 ]
