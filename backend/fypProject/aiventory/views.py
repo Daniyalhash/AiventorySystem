@@ -1,4 +1,5 @@
 from itertools import product
+import random
 from django.shortcuts import render
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -27,9 +28,12 @@ from datetime import datetime
 import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
+
+
 # MongoDB Atlas connection
 client = MongoClient("mongodb+srv://syeddaniyalhashmi123:test123@cluster0.dutvq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db = client["FYP"]
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "fallback_secret_key")
 
 # Predefined mappings for keywords
 COLUMN_MAP = {
@@ -51,7 +55,7 @@ REQUIRED_COLUMNS = [
     'DeliveryTime', 'ReliabilityScore', 'Barcode'
 ]
 
-# used
+# signUp page--->
 @api_view(['POST'])
 def upload_dataset(request):
     try:
@@ -203,7 +207,6 @@ def upload_dataset(request):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
-
 # for signUp done
 @api_view(['POST'])
 def signup(request):
@@ -228,32 +231,6 @@ def signup(request):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
-@api_view(['GET'])
-def get_vendor(request):
-    try:
-        # Get User ID from request parameters
-        user_id = request.query_params.get("user_id")
-        if not user_id:
-            return Response({"error": "User ID is required."}, status=400)
-
-        # Validate if user exists
-        user = db["users"].find_one({"_id": ObjectId(user_id)})
-        if not user:
-            return Response({"error": "User not found."}, status=404)
-
-        # Fetch vendors associated with the user
-        vendors = list(db["vendors"].find({"user_id": ObjectId(user_id)}))
-
-        # Prepare vendor data for response
-        vendor_list = []
-        for vendor in vendors:
-            vendor["_id"] = str(vendor["_id"])  # Convert ObjectId to string for JSON response
-            vendor_list.append(vendor)
-
-        return Response({"vendors": vendor_list}, status=200)
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
 
 # get details  done
 @api_view(['GET'])
@@ -284,9 +261,8 @@ def get_user_details(request):
     except Exception as e:
         return Response({"error": f"Error fetching user details: {str(e)}"}, status=500)
     
-# Create another endpoint to mark the user as "complete" once they press the dashboard button.
 #for login/signup 
-
+#signup--->
 @api_view(['POST'])
 def complete_signup(request):
     try:
@@ -326,8 +302,7 @@ def delete_user(request):
         return Response({"error": str(e)}, status=500)
 
 # for login donw
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "fallback_secret_key")
-#for login/signup 
+#for login/signup --->
 
 @api_view(['POST'])
 def login(request):
@@ -379,7 +354,6 @@ def validate_token(request):
 #for dashboard counts
 
 
-# mongodb+srv://syeddaniyalhashmi123:test123@cluster0.dutvq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
 @api_view(['GET'])
 def suggest_vendors_for_user(request):
     try:
@@ -419,121 +393,72 @@ def suggest_vendors_for_user(request):
     
     # @api_view(['POST'])
 
-# for dashboard page analysis
-@api_view(['GET'])
-def product_benchmark(request):
-    try:
-        # Get user_id and productname from the query parameters
-        user_id = request.query_params.get('user_id')
-        category = request.query_params.get('category', 'Shampoo')  # Default to 'Shampoo'
-        target_product = request.query_params.get('product', None)  # Product to analyze
 
-        if not user_id:
-            return Response({"error": "User ID is required!"}, status=400)
-   
-        if not target_product:
-            return Response({"error": "Product name is missing in the query parameters."}, status=400)
-        # Fetch user details from MongoDB
-        user = db["users"].find_one({"_id": ObjectId(user_id)})
-        if not user:
-            return Response({"error": "User not found!"}, status=404)
 
-        # Fetch the user's dataset
-        user_datasets = user.get("datasets", [])
-        if not user_datasets:
-            return Response({"error": "No datasets found for this user!"}, status=404)
-
-        # Fetch the first dataset
-        dataset_id = user_datasets[0].get("dataset_id")
-        dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
-        if not dataset_record or "data" not in dataset_record:
-            return Response({"error": "Dataset not found!"}, status=404)
-
-        # Convert dataset into a pandas DataFrame
-        df = pd.DataFrame(dataset_record["data"])
-
-        # Filter products based on the given category
-        category_products = df[df["category"] == category]
-        if category_products.empty:
-            return Response({"error": f"No products found in the category '{category}'!"}, status=404)
-
-        # Find the target product
-        target_product_data = category_products[category_products["productname"] == target_product]
-        if target_product_data.empty:
-            return Response({"error": f"Product '{target_product}' not found!"}, status=404)
-
-        # Fetch 3 competitors randomly
-        competitors = category_products[category_products["productname"] != target_product].sample(n=3, random_state=42)
-
-        # Combine target product and competitors
-        analysis_df = pd.concat([target_product_data, competitors])
-
-        # Calculate benchmarks
-        benchmarks = calculate_product_benchmarks(analysis_df)
-
-        return Response({"benchmarks": benchmarks})
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
-
-# for dashboard page analysis(Helper function to calculate product benchmarks)
-def calculate_product_benchmarks(df):
-    benchmarks = []
-
-    for _, row in df.iterrows():
-        productname = row.get("productname")
-        sellingprice = row.get("sellingprice")
-        costprice = row.get("costprice")
-        
-        # Handle missing values
-        sellingprice = sellingprice if not pd.isna(sellingprice) else 0
-        costprice = costprice if not pd.isna(costprice) else 0
-
-        # Calculate profit margin
-        profitmargin = (sellingprice - costprice) / sellingprice * 100 if sellingprice else 0
-
-        benchmarks.append({
-            "productname": productname,
-            "sellingprice": sellingprice,
-            "profitmargin": profitmargin,
-        })
-    
-    return benchmarks
-
+# Example function to serialize ObjectId
+def serialize_object_id(obj):
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: serialize_object_id(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [serialize_object_id(item) for item in obj]
+    return obj
 #to show dataset in invenoty page
-
+# inventory page -->
+# for product
 @api_view(['GET'])
 def get_current_dataset(request):
     user_id = request.GET.get("user_id", None)
 
     if not user_id:
         return Response({"error": "Missing user_id"}, status=400)
-
-    # Find the user's dataset from MongoDB
-    dataset = db["datasets"].find_one({"user_id": ObjectId(user_id)})
-    if not dataset:
-        return Response({"error": "No dataset found for the user."}, status=404)
-
+    if not ObjectId.is_valid(user_id):
+        return Response({"error": "Invalid user_id format"}, status=400)
     try:
-        # Fetch the actual dataset and format it similarly to the dummy data
-        data = dataset.get("data", [])
-        if not data:
-            return Response({"error": "Dataset is empty."}, status=404)
+        # Query the 'products' collection for the user's data
+        products_cursor = db["products"].find({"user_id": ObjectId(user_id)})
+        products_list = list(products_cursor)
+        
+        if not products_list:
+            return Response({"error": "No products found for the user"}, status=404)
+        # Extract and format product data for the response
+     # Format the product data for the response
+        formatted_products = [
+            {
+                "_id": str(product.get("_id")),
+                "dataset_id": str(product.get("dataset_id")) if product.get("dataset_id") else None,
+                "products": [
+                    {
+                        "productname": item.get("productname"),
+                        "category": item.get("category"),
+                        "subcategory": item.get("subcategory"),
+                        "stockquantity": item.get("stockquantity"),
+                        "sellingprice": item.get("sellingprice"),
+                        "Barcode": item.get("Barcode"),
+                        "expirydate": item.get("expirydate"),
+                        "pastsalesdata": item.get("pastsalesdata"),
+                        "timespan": item.get("timespan"),
+                        "reorderthreshold": item.get("reorderthreshold"),
+                        "costprice": item.get("costprice"),
+                        "vendor_id": str(item.get("vendor_id")) if item.get("vendor_id") else None,
+                    }
+                    for item in product.get("products", [])
+                ],
+                "upload_date": product.get("upload_date"),
+            }
+            for product in products_list
+        ]
 
-        # Format the dataset as you need for the frontend
-        formatted_data = {
-            "data": data
-        }
-
-        # Return the dataset in the same structure as the dummy data
-        return Response(formatted_data)
-
+        
+        print("done")
+        return Response({"products": [product["products"] for product in formatted_products]})
     except Exception as e:
         # Log the exception for debugging
         print(f"Error: {e}")
         return Response({"error": "Internal server error"}, status=500)
 
-# for visulization to show in invenoty page
+# inventory page
 @api_view(['GET'])
 def get_inventory_visuals(request):
     try:
@@ -547,41 +472,101 @@ def get_inventory_visuals(request):
         if not user:
             return Response({"error": "User not found!"}, status=404)
 
-        # Fetch the user's dataset
-        user_datasets = user.get("datasets", [])
-        if not user_datasets:
-            return Response({"error": "No datasets found for this user!"}, status=404)
+        # Query the 'products' collection for the user's data
+        products_cursor = db["products"].find({"user_id": ObjectId(user_id)})
+        products_list = list(products_cursor)
+        
+        if not products_list:
+            return Response({"error": "No products found for the user"}, status=404)
 
-        # Fetch the first dataset
-        dataset_id = user_datasets[0].get("dataset_id")
-        dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
-        if not dataset_record or "data" not in dataset_record:
-            return Response({"error": "Dataset not found!"}, status=404)
+        formatted_products = [
+            {
+                "_id": str(product.get("_id")),
+                "dataset_id": str(product.get("dataset_id")) if product.get("dataset_id") else None,
+                "products": [
+                    {
+                        "productname": item.get("productname"),
+                        "category": item.get("category"),
+                        "subcategory": item.get("subcategory"),
+                        "stockquantity": item.get("stockquantity"),
+                        "sellingprice": item.get("sellingprice"),
+                        "Barcode": item.get("Barcode"),
+                        "expirydate": item.get("expirydate"),
+                        "pastsalesdata": item.get("pastsalesdata"),
+                        "timespan": item.get("timespan"),
+                        "reorderthreshold": item.get("reorderthreshold"),
+                        "costprice": item.get("costprice"),
+                        "vendor_id": str(item.get("vendor_id")) if item.get("vendor_id") else None,
+                    }
+                    for item in product.get("products", [])
+                ],
+                "upload_date": product.get("upload_date"),
+            }
+            for product in products_list
+        ]
 
-        # Convert dataset into a pandas DataFrame
-        df = pd.DataFrame(dataset_record["data"])
+        # Prepare lists to store the aggregated data for each visualization
+        category_profit_margin = []
+        category_cost = []
+        product_profit_margin = []
+        product_price_comparison = []
 
-        # 1. Category-wise Profit Margin
-        df['profit_margin'] = (df['sellingprice'] - df['costprice']) / df['costprice'] * 100
-        category_profit_margin = df.groupby('category')['profit_margin'].mean().reset_index()
-        category_profit_margin = category_profit_margin.to_dict(orient='records')
+        # Calculate the necessary visual data
+        category_data = {}
+        product_data = {}
 
-        # 2. Category-wise Cost
-        category_cost = df.groupby('category')['costprice'].sum().reset_index()
-        category_cost = category_cost.to_dict(orient='records')
+        for product in formatted_products:
+            for item in product["products"]:
+                category = item["category"]
+                selling_price = item["sellingprice"]
+                cost_price = item["costprice"]
+                product_name = item["productname"]
+                
+                if cost_price > 0:
+                    profit_margin = (selling_price - cost_price) / cost_price * 100
+                else:
+                    profit_margin = 0
 
-        # 3. Product-wise Profit Margin (horizontal bar chart)
-        product_profit_margin = df[['productname', 'profit_margin']].sort_values(by='profit_margin', ascending=False).head(10)
-        product_profit_margin = product_profit_margin.to_dict(orient='records')
+                # Calculate category-wise profit margin
+                if category not in category_data:
+                    category_data[category] = {"total_profit_margin": 0, "count": 0, "total_cost": 0}
+                category_data[category]["total_profit_margin"] += profit_margin
+                category_data[category]["count"] += 1
+                category_data[category]["total_cost"] += cost_price
 
-        # 4. Comparison of Selling Price and Cost Price
-        product_price_comparison = df[['productname', 'sellingprice', 'costprice']].head(10)
-        product_price_comparison = product_price_comparison.to_dict(orient='records')
+                # Calculate product-wise profit margin
+                product_data[product_name] = product_data.get(product_name, {"total_profit_margin": 0, "count": 0})
+                product_data[product_name]["total_profit_margin"] += profit_margin
+                product_data[product_name]["count"] += 1
 
+                # For price comparison (Selling Price vs. Cost Price)
+                product_price_comparison.append({
+                    "productname": product_name,
+                    "sellingprice": selling_price,
+                    "costprice": cost_price
+                })
+
+        # Aggregate category data
+        for category, data in category_data.items():
+            avg_profit_margin = data["total_profit_margin"] / data["count"] if data["count"] > 0 else 0
+            category_profit_margin.append({
+                "category": category,
+                "avg_profit_margin": avg_profit_margin,
+                "total_cost": data["total_cost"]
+            })
+
+        # Aggregate product profit margin data
+        product_profit_margin = [{"productname": product_name, "avg_profit_margin": data["total_profit_margin"] / data["count"]} 
+                                 for product_name, data in product_data.items()]
+
+        # Sort product profit margin in descending order
+        product_profit_margin = sorted(product_profit_margin, key=lambda x: x["avg_profit_margin"], reverse=True)[:10]
+        print("everything is ok")
+        print("category wise ", category_profit_margin )
         # Return data for visualizations
         return Response({
             "category_profit_margin": category_profit_margin,
-            "category_cost": category_cost,
+            "category_cost": [{"category": category, "total_cost": data["total_cost"]} for category, data in category_data.items()],
             "product_profit_margin": product_profit_margin,
             "product_price_comparison": product_price_comparison,
         })
@@ -589,8 +574,52 @@ def get_inventory_visuals(request):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
+# for vendors page
 @api_view(['GET'])
-def get_insights_visuals(request):
+def get_vendor(request):
+    user_id = request.GET.get("user_id", None)
+
+    if not user_id:
+        return Response({"error": "Missing user_id"}, status=400)
+    if not ObjectId.is_valid(user_id):
+        return Response({"error": "Invalid user_id format"}, status=400)
+    try:
+        # Query the 'vendor' collection for the user's data
+        vendor_cursor = db["vendors"].find({"user_id": ObjectId(user_id)})
+        vendor_list = list(vendor_cursor)
+        
+        if not vendor_list:
+            return Response({"error": "No vendor found for the user"}, status=404)
+        # Extract and format product data for the response
+     # Format the product data for the response
+        formatted_vendor = [
+            {
+               "_id": str(vendor.get("_id")),
+                "dataset_id": str(vendor.get("dataset_id")) if vendor.get("dataset_id") else None,
+                "vendors": [
+                    {
+                        "vendor": vendor_item.get("vendor"),
+                        "DeliveryTime": vendor_item.get("DeliveryTime"),
+                        "ReliabilityScore": vendor_item.get("ReliabilityScore"),
+                        "_id": str(vendor_item.get("_id")) if vendor_item.get("_id") else None,
+                    }
+                    for vendor_item in vendor.get("vendors", [])
+                ],
+                "upload_date": vendor.get("upload_date"),
+            }
+            for vendor in vendor_list
+        ]
+
+        
+        print("done-vendor")
+        return Response({"vendors": [vendor["vendors"] for vendor in formatted_vendor]})
+    except Exception as e:
+        # Log the exception for debugging
+        print(f"Error: {e}")
+        return Response({"error": "Internal server error"}, status=500)
+
+@api_view(['GET'])
+def get_vendor_visuals(request):
     try:
         # Get the user_id from the query parameters
         user_id = request.query_params.get('user_id')
@@ -602,53 +631,64 @@ def get_insights_visuals(request):
         if not user:
             return Response({"error": "User not found!"}, status=404)
 
-        # Fetch the user's dataset
-        user_datasets = user.get("datasets", [])
-        if not user_datasets:
-            return Response({"error": "No datasets found for this user!"}, status=404)
+        # Query the 'products' collection for the user's data
+        vendor_cursor = db["vendors"].find({"user_id": ObjectId(user_id)})
+        vendors_list = list(vendor_cursor)
+        
+        if not vendors_list:
+            return Response({"error": "No products found for the user"}, status=404)
 
-        # Fetch the first dataset
-        dataset_id = user_datasets[0].get("dataset_id")
-        dataset_record = db["datasets"].find_one({"_id": ObjectId(dataset_id)})
-        if not dataset_record or "data" not in dataset_record:
-            return Response({"error": "Dataset not found!"}, status=404)
+        formatted_vendors = [
+            {
+                "_id": str(vendor.get("_id")),
+                "dataset_id": str(vendor.get("dataset_id")) if vendor.get("dataset_id") else None,
+                "vendors": [
+                    {
+                        "vendor": vendor_item.get("vendor"),
+                        "DeliveryTime": vendor_item.get("DeliveryTime"),
+                        "ReliabilityScore": vendor_item.get("ReliabilityScore"),
+                        "_id": str(vendor_item.get("_id")) if vendor_item.get("_id") else None,
+                    }
+                    for vendor_item in vendor.get("vendors", [])
+                ],
+                "upload_date": vendor.get("upload_date"),
+            }
+            for vendor in vendors_list
+        ]
 
-        # Convert dataset into a pandas DataFrame
-        df = pd.DataFrame(dataset_record["data"])
-         # 1. Product Benchmarking: Compare 3 products in the same category based on selling price and profit margin.
-        selected_category = "Electronics"  # Example category (you can make this dynamic)
-        benchmarking_products = df[df['category'] == selected_category].head(3)
-        benchmarking_data = benchmarking_products.assign(
-            profit_margin=benchmarking_products['sellingprice'] - benchmarking_products['costprice']
-        )[["productname", "sellingprice", "profit_margin"]].to_dict(orient="records")
+        # Prepare lists to store the aggregated data for each visualization
+        reliability_scores = []
+        delivery_times = []
 
-        # 2. Identify Low Stock Products
-        low_stock_products = df[df['stockquantity'] < df['reorderthreshold']]
-        low_stock_data = low_stock_products[["productname", "category", "New Vendors", "stockquantity"]].to_dict(orient="records")
+        
 
-        # 3. Best Vendor Suggestion
-        vendor_scores = (
-            df.groupby('vendor')
-            .agg(
-                avg_reliability=('ReliabilityScore', 'mean'),
-                avg_delivery_time=('DeliveryTime', 'mean'),
-            )
-            .sort_values(by=['avg_reliability', 'avg_delivery_time'], ascending=[False, True])
-            .head(3)
-            .reset_index()
-            .to_dict(orient="records")
-        )
+        for vendor in formatted_vendors:
+            for item in vendor["vendors"]:
+                # Collect delivery time and reliability score for each vendor
+                delivery_time = item.get("DeliveryTime")
+                reliability_score = item.get("ReliabilityScore")
 
+                if delivery_time is not None:
+                    delivery_times.append({"vendor": item["vendor"], "delivery_time": delivery_time})
+                
+                if reliability_score is not None:
+                    reliability_scores.append({"vendor": item["vendor"], "reliability_score": reliability_score})
+
+        print("everything is ok for vendor visual")
+        # Return data for visualizations
+        print("relibiltiy",reliability_score)
         return Response({
-            "benchmarking_data": benchmarking_data,
-            "low_stock_data": low_stock_data,
-            "vendor_suggestions": vendor_scores,
+            
+            "reliability_scores": reliability_scores,  # New data for reliability scores
+            "delivery_times": delivery_times,  # New data for delivery times
         })
+
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 
+
 # 
-#for dashboard
+#for dashboard--->
 # Path where the dataset files are stored
 @api_view(['GET'])
 def get_total_products(request):
@@ -669,6 +709,7 @@ def get_total_products(request):
 
         # Low stock threshold
         low_stock_threshold = 5
+        low_stock_product_list = []
 
         for product_doc in product_documents:
             # Access the `products` array inside each document
@@ -676,14 +717,24 @@ def get_total_products(request):
 
             for product in products_array:
                 # Extract product name and add to unique set
+                stockquantity = product.get("stockquantity", 0)
+                reorderthreshold = product.get("reorderthreshold", 0)
+                category = product.get("category", "N/A")
+                vendor_id = product.get("vendor_id", "N/A")
                 product_name = product.get("productname")
                 if product_name:
                     total_unique_products.add(product_name)
 
                 # Check stock quantity for low stock
-                stock_quantity = product.get("stockquantity", 0)
-                if stock_quantity < low_stock_threshold:
-                    low_stock_products += 1
+                if stockquantity < reorderthreshold:
+                    print("Low stock product found:", product.get("productname"))  # Print low stock product
+                    low_stock_product_list.append({
+                        "productname": product.get("productname"),
+                        "category": category,
+                        "stockquantity": stockquantity,
+                        "vendor_id": str(vendor_id)  # Convert ObjectId to string
+
+                    })
 
                 # Extract vendor_id and add to unique vendor set
                 vendor_id = product.get("vendor_id")
@@ -693,13 +744,14 @@ def get_total_products(request):
         # Calculate totals
         total_unique_products_count = len(total_unique_products)
         total_vendors_count = len(total_vendors)
+        total_low_stock = len(low_stock_product_list)
         print(total_unique_products_count)
-        print(low_stock_products)
+        print(total_low_stock)
         print(total_vendors_count)
         # Return results
         return Response({
             "total_unique_products": total_unique_products_count,
-            "low_stock_products": low_stock_products,
+            "low_stock_products_list": total_low_stock,
             "total_vendors": total_vendors_count
         })
 
@@ -735,7 +787,176 @@ def get_products(request):
     ]
     
     return JsonResponse({"products": products})
-# for insghts
+
+# for dashboard 
+# page analysis
+# @api_view(['GET'])
+# def get_dashbaord_visuals(request):
+#     try:
+#         # Get user_id and productname from the query parameters
+#         user_id = request.query_params.get('user_id')
+
+#         if not user_id:
+#             return Response({"error": "User ID is required!"}, status=400)
+
+        
+
+#         # Fetch user details from MongoDB
+#         user = db["users"].find_one({"_id": ObjectId(user_id)})
+#         if not user:
+#             return Response({"error": "User not found!"}, status=404)
+
+#         # Fetch the product dataset
+#         # Query the `products` collection for all documents associated with this user_id
+#         product_documents = db["products"].find({"user_id": ObjectId(user_id)})
+#         if not product_documents:
+#             return Response({"error": "No products found for this user!"}, status=404)
+
+#         # Initialize an array to hold products in the selected category
+#         products_in_category = []
+
+#         for product_doc in product_documents:
+#             # Access the `products` array
+#             products_array = product_doc.get("products", [])
+#             if not isinstance(products_array, list):
+#                 continue  # Skip invalid products field
+
+#             for product in products_array:
+#                 # Only add products that match the selected category
+#                 if product.get("category"):
+#                     selling_price = product.get("sellingprice", 0)
+#                     cost_price = product.get("costprice", 0)
+                  
+
+#                     products_in_category.append({
+#                         "productname": product.get("productname"),
+#                         "category": product.get("category"),
+
+#                         "sellingprice": selling_price,
+#                         "costprice": cost_price,
+                        
+#                     })
+#         print("benchamrk are coming?",)
+#         return Response({"benchmarks": products_in_category})
+
+#     except Exception as e:
+#         return Response({"error": str(e)}, status=500)
+@api_view(['GET'])
+def get_dashboard_visuals(request):
+    try:
+        # Get user_id from the query parameters
+        user_id = request.query_params.get('user_id')
+
+        if not user_id:
+            return Response({"error": "User ID is required!"}, status=400)
+
+        # Fetch user details from MongoDB
+        user = db["users"].find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return Response({"error": "User not found!"}, status=404)
+
+        # Fetch the product dataset
+        product_documents = db["products"].find({"user_id": ObjectId(user_id)})
+        if not product_documents:
+            return Response({"error": "No products found for this user!"}, status=404)
+
+        # Initialize a dictionary to store products by category
+        category_products = {}
+
+        for product_doc in product_documents:
+            products_array = product_doc.get("products", [])
+            if not isinstance(products_array, list):
+                continue  # Skip invalid products field
+
+            for product in products_array:
+                category = product.get("category")
+                if category:
+                    if category not in category_products:
+                        category_products[category] = []
+
+                    selling_price = product.get("sellingprice", 0)
+                    cost_price = product.get("costprice", 0)
+
+                    # Calculate profit margin
+                    if selling_price > 0:
+                        profit_margin = (selling_price - cost_price) / selling_price
+                    else:
+                        profit_margin = 0  # Avoid division by zero
+
+                    category_products[category].append({
+                        "productname": product.get("productname"),
+                        "category": category,
+                        "sellingprice": selling_price,
+                        "costprice": cost_price,
+                        "profit_margin": profit_margin
+                    })
+
+        # Select a random category
+        if category_products:
+            random_category = random.choice(list(category_products.keys()))
+            products_in_category = category_products[random_category]
+
+            # Select two random products from this category
+            if len(products_in_category) >= 2:
+                random_products = random.sample(products_in_category, 2)
+                print("comparison")
+                # Return the two products' comparison data
+                # Format the response to match the chart component's expectations
+                response_data = {
+                    "benchmarks": [
+                        {
+                            "productname": random_products[0]["productname"],
+                            "sellingprice": random_products[0]["sellingprice"],
+                            "profitmargin": random_products[0]["profit_margin"] * 100  # Convert to percentage
+                        },
+                        {
+                            "productname": random_products[1]["productname"],
+                            "sellingprice": random_products[1]["sellingprice"],
+                            "profitmargin": random_products[1]["profit_margin"] * 100  # Convert to percentage
+                        },{
+                            "productname": random_products[1]["productname"],
+                            "sellingprice": random_products[1]["sellingprice"],
+                            "profitmargin": random_products[1]["profit_margin"] * 100  # Convert to percentage
+                        }
+                    ]
+                }
+                print(response_data)
+                return Response(response_data)
+
+            else:
+                return Response({"error": "Not enough products in this category for comparison."}, status=404)
+        else:
+            return Response({"error": "No products available for comparison."}, status=404)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+# for dashboard page analysis(Helper function to calculate product benchmarks)
+def calculate_product_benchmarks(df):
+    benchmarks = []
+
+    for _, row in df.iterrows():
+        productname = row.get("productname")
+        sellingprice = row.get("sellingprice")
+        costprice = row.get("costprice")
+        
+        # Handle missing values
+        sellingprice = sellingprice if not pd.isna(sellingprice) else 0
+        costprice = costprice if not pd.isna(costprice) else 0
+
+        # Calculate profit margin
+        profitmargin = (sellingprice - costprice) / sellingprice * 100 if sellingprice else 0
+
+        benchmarks.append({
+            "productname": productname,
+            "sellingprice": sellingprice,
+            "profitmargin": profitmargin,
+        })
+    
+    return benchmarks
+
+
+
+# for insghts--->
 
 # Fetch unique categories from the product dataset / done
 @api_view(['GET'])
@@ -957,7 +1178,7 @@ def get_products_by_name(request):
 
 
 # for insghts
-
+# low stock product
 # Fetch unique categories from the product dataset / done
 @api_view(['GET'])
 def get_categories_p(request):
@@ -1001,86 +1222,9 @@ def get_categories_p(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
-from rest_framework.response import Response
-from rest_framework.decorators import api_view
-from bson import ObjectId
-import traceback
 
 
-
-@api_view(['GET'])
-def get_vendor_details(request):
-    user_id = request.query_params.get('user_id')
-    category = request.query_params.get('category')
-    productname = request.query_params.get('productname')
-
-    # Validate required parameters
-    if not user_id:
-        return Response({"error": "User ID is required!"}, status=400)
-    if not category:
-        return Response({"error": "Category is required!"}, status=400)
-    if not productname:
-        return Response({"error": "Product name is required!"}, status=400)
-
-    try:
-        # Validate `user_id` format
-        try:
-            user_id = ObjectId(user_id)
-        except Exception:
-            return Response({"error": "Invalid User ID format!"}, status=400)
-
-        # Query the `products` collection for products by the user
-        product_documents = list(db["products"].find({"user_id": user_id}))
-        if not product_documents:
-            return Response({"error": "No products found for this user!"}, status=404)
-
-        # Initialize response variables
-        product_found = None
-        vendor_ids = set()
-
-        # Find the product in the specified category
-        for product_doc in product_documents:
-            for product in product_doc.get("products", []):
-                if product.get("category") == category and product.get("productname") == productname:
-                    product_found = product
-                    vendor_ids.add(str(product.get("vendor_id")))  # Add vendor_id to the set
-                    break
-            if product_found:
-                break  # Exit loop when the product is found
-
-        if not product_found:
-            return Response({"error": "Product not found in the specified category!"}, status=404)
-
-        # Query the `vendors` collection for the vendor details
-        vendors = list(db["vendors"].find({"_id": {"$in": [ObjectId(vendor_id) for vendor_id in vendor_ids]}}))
-
-        if not vendors:
-            return Response({"error": "No vendor details found for this product!"}, status=404)
-
-        # Build the vendor details response
-        vendor_list = []
-        for vendor in vendors:
-            vendor_details = {
-                "vendor": vendor.get("vendor", "Unknown Vendor"),
-                "DeliveryTime": vendor.get("DeliveryTime", "Unknown DeliveryTime"),
-                "ReliabilityScore": vendor.get("ReliabilityScore", "Unknown ReliabilityScore")
-            }
-            vendor_list.append(vendor_details)
-
-        # If multiple vendors exist, return them
-        print("wah bahi",vendor_details)
-        if len(vendor_list) > 1:
-            return Response({
-                "product": productname,
-                "category": category,
-                "multiple_vendors": vendor_list
-            }, status=200)
-        else:
-            return Response({"error": "Product does not have multiple vendors!"}, status=404)
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
-
+# for insights
 
 @api_view(['GET'])
 def get_vendor_details(request):
@@ -1145,18 +1289,19 @@ def get_vendor_details(request):
                     vendor_list.append(vendor_info)
         if not vendor_info:
             return Response({"error": "Vendor not found!"}, status=404)
+        # Sort vendors by ReliabilityScore or other metrics (optional)
+        sorted_vendors = sorted(vendor_list, key=lambda x: x.get("ReliabilityScore", 0), reverse=True)
 
             
-        print("Double vendor aere",vendor_list)
-        return Response(vendor_list, status=200)
+        print("Double vendor aere",sorted_vendors)
+        return Response(sorted_vendors, status=200)
 
     except Exception as e:
         import traceback
         print(traceback.format_exc())  # Debug stack trace
         return Response({"error": str(e)}, status=500)
-
     
-
+#insight
 
 @api_view(['GET'])
 def get_lowVendor(request):
@@ -1219,28 +1364,7 @@ def get_lowVendor(request):
         print(traceback.format_exc())  # Debugging
         return Response({"error": str(e)}, status=500)
 
-# "product": {
-#                 "productname": product_data.get("productname"),
-#                 "category": product_data.get("category"),
-#                 "stockquantity": product_data.get("stockquantity"),
-#                 "sellingprice": product_data.get("sellingprice"),
-#                 "costprice": product_data.get("costprice"),
-#                 "profitmargin": calculate_profit_margin(
-#                     product_data.get("sellingprice", 0),
-#                     product_data.get("costprice", 0)
-#                 ),
-#                 "barcode": product_data.get("Barcode"),
-#                 "expirydate": product_data.get("expirydate"),
-#                 "reorderthreshold": product_data.get("reorderthreshold"),
-#                 "product_id": str(product_data.get("_id", ""))
-#             },
-# Helper function to calculate profit margin
-# def calculate_profit_margin(selling_price, cost_price):
-#     if cost_price == 0:
-#         return 0
-#     return round(((selling_price - cost_price) / cost_price) * 100, 2)
-
-
+# i think not used
 
 @api_view(['GET'])
 def get_low_stock_products(request):
