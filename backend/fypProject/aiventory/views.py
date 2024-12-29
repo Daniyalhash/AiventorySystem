@@ -631,12 +631,12 @@ def get_vendor_visuals(request):
         if not user:
             return Response({"error": "User not found!"}, status=404)
 
-        # Query the 'products' collection for the user's data
+        # Query the 'vendors' collection for the user's data
         vendor_cursor = db["vendors"].find({"user_id": ObjectId(user_id)})
         vendors_list = list(vendor_cursor)
-        
+
         if not vendors_list:
-            return Response({"error": "No products found for the user"}, status=404)
+            return Response({"error": "No vendors found for the user"}, status=404)
 
         formatted_vendors = [
             {
@@ -656,36 +656,39 @@ def get_vendor_visuals(request):
             for vendor in vendors_list
         ]
 
-        # Prepare lists to store the aggregated data for each visualization
-        reliability_scores = []
-        delivery_times = []
+        # Separate lists for reliability scores and delivery times
+        all_reliability_scores = []
+        all_delivery_times = []
 
-        
-
+        # Collect the reliability scores and delivery times
         for vendor in formatted_vendors:
             for item in vendor["vendors"]:
-                # Collect delivery time and reliability score for each vendor
-                delivery_time = item.get("DeliveryTime")
-                reliability_score = item.get("ReliabilityScore")
+                if item.get("DeliveryTime") is not None:
+                    all_delivery_times.append({
+                        "vendor": item["vendor"],
+                        "delivery_time": item["DeliveryTime"]
+                    })
+                if item.get("ReliabilityScore") is not None:
+                    all_reliability_scores.append({
+                        "vendor": item["vendor"],
+                        "reliability_score": item["ReliabilityScore"]
+                    })
 
-                if delivery_time is not None:
-                    delivery_times.append({"vendor": item["vendor"], "delivery_time": delivery_time})
-                
-                if reliability_score is not None:
-                    reliability_scores.append({"vendor": item["vendor"], "reliability_score": reliability_score})
+        # Sort by ReliabilityScore in descending order
+        top_reliability_vendors = sorted(all_reliability_scores, key=lambda x: x["reliability_score"], reverse=True)[:5]
 
-        print("everything is ok for vendor visual")
-        # Return data for visualizations
-        print("relibiltiy",reliability_score)
+        # Sort by DeliveryTime in ascending order (lower delivery time is better)
+        top_delivery_vendors = sorted(all_delivery_times, key=lambda x: x["delivery_time"])[:5]
+        print("top_reliability_vendors",top_reliability_vendors)
+        print("top_delivery_vendors",top_delivery_vendors)
+        # Prepare the response data for visualization
         return Response({
-            
-            "reliability_scores": reliability_scores,  # New data for reliability scores
-            "delivery_times": delivery_times,  # New data for delivery times
+            "top_reliability_vendors": top_reliability_vendors,
+            "top_delivery_vendors": top_delivery_vendors,
         })
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
-
 
 # 
 #for dashboard--->
@@ -760,87 +763,64 @@ def get_total_products(request):
 # Fetch products, filter by category and user_id (optional)
 @api_view(['GET'])
 def get_products(request):
-    """ Fetch all products or filter by category and user_id """
-    category = request.GET.get('category', None)  # Get the category filter if provided
-    user_id = request.GET.get('user_id', None)  # Get the user_id filter if provided
+    user_id = request.query_params.get('user_id')
+    category = request.query_params.get('category')
     
-    query = {}
-    if category:
-        query['category'] = category
-    if user_id:
-        query['user_id'] = ObjectId(user_id)  # Filter by user_id
+    # Check if the user_id is provided
+    if not user_id:
+        return Response({"error": "User ID is required!"}, status=400)
 
-    # Query to get products from MongoDB
-    products = list(products_collection.find(query))
-    
-    # Transform the MongoDB documents to a suitable format for the response
-    products = [
-        {
-            "id": str(product["_id"]),
-            "name": product["name"],
-            "category": product["category"],
-            "price": product["price"],
-            "profitMargin": product["profitMargin"],
-            "vendorId": str(product["vendorId"]),
-        }
-        for product in products
-    ]
-    
-    return JsonResponse({"products": products})
+    try:
+        # Validate user_id format
+        try:
+            user_id = ObjectId(user_id)
+        except Exception:
+            return Response({"error": "Invalid User ID format!"}, status=400)
 
-# for dashboard 
-# page analysis
-# @api_view(['GET'])
-# def get_dashbaord_visuals(request):
-#     try:
-#         # Get user_id and productname from the query parameters
-#         user_id = request.query_params.get('user_id')
+        # Fetch the products associated with the user
+        product_documents = list(db["products"].find({"user_id": user_id}))
+        if len(product_documents) == 0:
+            return Response({"error": "No products found for this user!"}, status=404)
 
-#         if not user_id:
-#             return Response({"error": "User ID is required!"}, status=400)
+        # Initialize an array to hold filtered products
+        products_in_category = []
 
-        
+        for product_doc in product_documents:
+            # Access the `products` array within each product document
+            products_array = product_doc.get("products", [])
+            if not isinstance(products_array, list):
+                continue  # Skip invalid `products` field
 
-#         # Fetch user details from MongoDB
-#         user = db["users"].find_one({"_id": ObjectId(user_id)})
-#         if not user:
-#             return Response({"error": "User not found!"}, status=404)
+            for product in products_array:
+                # Add product if it matches the selected category or if no category filter is provided
+                if not category or product.get("category") == category:
+                    products_in_category.append({
+                        "productname": product.get("productname"),
+                        "category": product.get("category"),
+                        "stockquantity": product.get("stockquantity"),
+                        "sellingprice": product.get("sellingprice"),
+                        "Barcode": product.get("Barcode"),
+                        "expirydate": product.get("expirydate"),
+                        "reorderthreshold": product.get("reorderthreshold"),
+                        "costprice": product.get("costprice"),
+                        "id": str(product.get("_id", "")),  # Ensure valid _id format
+                        "vendor_id": product.get("vendor_id")  # Ensure vendor_id exists
+                    })
 
-#         # Fetch the product dataset
-#         # Query the `products` collection for all documents associated with this user_id
-#         product_documents = db["products"].find({"user_id": ObjectId(user_id)})
-#         if not product_documents:
-#             return Response({"error": "No products found for this user!"}, status=404)
+        # Convert MongoDB ObjectId if necessary (use your existing method)
+        converted_data = convert_objectid(products_in_category)
 
-#         # Initialize an array to hold products in the selected category
-#         products_in_category = []
+        # Return the filtered list of products
+        return Response({
+            "products": converted_data
+        })
 
-#         for product_doc in product_documents:
-#             # Access the `products` array
-#             products_array = product_doc.get("products", [])
-#             if not isinstance(products_array, list):
-#                 continue  # Skip invalid products field
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())  # Print stack trace for debugging
+        return Response({"error": str(e)}, status=500)
 
-#             for product in products_array:
-#                 # Only add products that match the selected category
-#                 if product.get("category"):
-#                     selling_price = product.get("sellingprice", 0)
-#                     cost_price = product.get("costprice", 0)
-                  
 
-#                     products_in_category.append({
-#                         "productname": product.get("productname"),
-#                         "category": product.get("category"),
-
-#                         "sellingprice": selling_price,
-#                         "costprice": cost_price,
-                        
-#                     })
-#         print("benchamrk are coming?",)
-#         return Response({"benchmarks": products_in_category})
-
-#     except Exception as e:
-#         return Response({"error": str(e)}, status=500)
 @api_view(['GET'])
 def get_dashboard_visuals(request):
     try:
@@ -1056,8 +1036,9 @@ def get_top_products_by_category(request):
                     })
 
         # Return the top 5 products in the selected category
-        top_5_products = products_in_category[:5]
-        converted_data = convert_objectid(top_5_products)
+        # top_5_products = products_in_category[:5]
+        # converted_data = convert_objectid(top_5_products)
+        converted_data = convert_objectid(products_in_category)
 
         return Response({
             "products": converted_data
